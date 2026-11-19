@@ -46,7 +46,6 @@ class YahooMarketData:
             period="6mo",
             interval="1d",
             auto_adjust=True,
-            repair=True,
         )
         missing = [column for column in REQUIRED_COLUMNS if column not in frame.columns]
         if missing:

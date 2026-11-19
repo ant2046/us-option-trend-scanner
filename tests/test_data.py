@@ -14,8 +14,10 @@ NY = ZoneInfo("America/New_York")
 class FakeTicker:
     def __init__(self, frames):
         self.frames = list(frames)
+        self.calls = []
 
     def history(self, **kwargs):
+        self.calls.append(kwargs)
         return self.frames.pop(0)
 
 
@@ -33,11 +35,13 @@ def bars(index, **overrides):
 
 def test_daily_history_drops_unfinished_session():
     frame = bars(pd.to_datetime(["2026-11-18", "2026-11-19"]))
-    data = YahooMarketData(ticker_factory=lambda _: FakeTicker([frame]), sleep=lambda _: None)
+    ticker = FakeTicker([frame])
+    data = YahooMarketData(ticker_factory=lambda _: ticker, sleep=lambda _: None)
 
     result = data.daily_history("SPY", completed_before=datetime(2026, 11, 19, 8, 30, tzinfo=NY))
 
     assert list(result.index.date) == [datetime(2026, 11, 18).date()]
+    assert ticker.calls[0].get("repair", False) is False
 
 
 def test_daily_history_rejects_missing_ohlcv_column():
