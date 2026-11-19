@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 WORKFLOW = Path(".github/workflows/premarket-scan.yml")
 
@@ -20,3 +22,14 @@ def test_webhook_only_comes_from_github_secret():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "secrets.WECOM_WEBHOOK_URL" in text
     assert "qyapi.weixin.qq.com" not in text
+
+
+def test_workflow_installs_cjk_font_before_sending_image_report():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["scan"]["steps"]
+    font_index = next(index for index, step in enumerate(steps) if step.get("name") == "Install CJK font")
+    send_index = next(index for index, step in enumerate(steps) if step.get("name") == "Scheduled or explicitly requested send")
+
+    assert "fonts-noto-cjk" in steps[font_index]["run"]
+    assert font_index < send_index
+    assert steps[send_index]["env"]["WECOM_WEBHOOK_URL"] == "${{ secrets.WECOM_WEBHOOK_URL }}"
