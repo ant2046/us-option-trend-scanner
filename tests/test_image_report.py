@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from PIL import Image
 
-from market_scanner.image_report import _candidate_view, _status_style, render_png, resolve_font_path
-from market_scanner.models import Candidate, MarketSession, PremarketQuote, QuoteStatus, TrendSignal
+from market_scanner.image_report import _candidate_view, _status_style, render_png, render_png_pages, resolve_font_path
+from market_scanner.models import Candidate, CandidateAssessment, DimensionScore, DimensionStatus, MarketSession, PremarketQuote, QuoteStatus, RiskLevel, RiskTag, TrendSignal
 from market_scanner.report import ReportError, ScanReport
 
 
@@ -77,3 +77,25 @@ def test_font_resolution_skips_existing_invalid_or_non_cjk_files(monkeypatch, tm
     )
 
     assert resolve_font_path() == valid_font
+
+
+def test_enriched_image_report_paginates_nine_cards_and_preserves_order():
+    items = tuple(make_candidate(price=101 + index) for index in range(9))
+    assessments = tuple(
+        CandidateAssessment(
+            item, 60 + index, 80, 0.8, 75 + index,
+            (DimensionScore("技术", 26, 30, DimensionStatus.OK),),
+            (RiskTag(RiskLevel.CAUTION, f"tag-{index}", "风险标签", "说明"),),
+        )
+        for index, item in enumerate(items)
+    )
+    enriched = ScanReport(
+        MarketSession(date(2026, 11, 19), datetime(2026, 11, 19, 9, 30, tzinfo=NY)),
+        "SPY合格", "QQQ合格", items, assessments=assessments,
+    )
+
+    pages = render_png_pages(enriched, font_path=FONT_PATH)
+
+    assert len(pages) >= 2
+    assert all(page.startswith(b"\x89PNG") and len(page) < 2 * 1024 * 1024 for page in pages)
+    assert all(Image.open(BytesIO(page)).width == 860 for page in pages)

@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from market_scanner.models import Candidate, MarketSession, PremarketQuote, QuoteStatus, TrendSignal
+from market_scanner.models import Candidate, CandidateAssessment, DimensionScore, DimensionStatus, MarketSession, PremarketQuote, QuoteStatus, RiskLevel, RiskTag, TrendSignal
 from market_scanner.report import ReportError, ScanReport, WeComClient, render_markdown
 
 
@@ -88,6 +88,25 @@ def test_stale_quote_does_not_render_numeric_price():
     text = render_markdown(report([stale]))[0]
     assert "盘前 `--`" in text
     assert "盘前 `99.00`" not in text
+
+
+def test_enriched_markdown_shows_scores_completeness_tags_and_disclaimer():
+    item = candidate()
+    assessment = CandidateAssessment(
+        item, 62, 80, 0.8, 78,
+        (DimensionScore("技术", 26, 30, DimensionStatus.OK), DimensionScore("期权", 8, 15, DimensionStatus.PARTIAL)),
+        (RiskTag(RiskLevel.CAUTION, "spread", "期权价差偏大", "12%"),),
+    )
+    enriched = ScanReport(report().session, "SPY 趋势合格", "QQQ 趋势合格", (item,), assessments=(assessment,))
+
+    text = "\n".join(render_markdown(enriched))
+
+    assert "62/80" in text
+    assert "观察分 78/100" in text
+    assert "数据完整度 80%" in text
+    assert "技术 26/30" in text and "期权 8/15" in text
+    assert "期权价差偏大" in text
+    assert "不代表胜率" in text
 
 
 def test_formatted_traceback_does_not_contain_webhook_key():

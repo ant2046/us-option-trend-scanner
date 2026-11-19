@@ -6,7 +6,7 @@ import hashlib
 
 import requests
 
-from .models import Candidate, MarketSession
+from .models import Candidate, CandidateAssessment, MarketSession
 
 
 TITLE = "# 美股盘前趋势扫描"
@@ -24,6 +24,7 @@ class ScanReport:
     qqq_summary: str
     candidates: tuple[Candidate, ...]
     failures: tuple[str, ...] = ()
+    assessments: tuple[CandidateAssessment, ...] = ()
 
 
 def _candidate_lines(item: Candidate) -> list[str]:
@@ -41,6 +42,20 @@ def _candidate_lines(item: Candidate) -> list[str]:
     ]
 
 
+def _assessment_lines(assessment: CandidateAssessment) -> list[str]:
+    normalized = f"｜观察分 {assessment.normalized_score}/100" if assessment.normalized_score is not None else "｜观察分 --"
+    dimensions = " · ".join(
+        f"{item.name} {item.earned_points}/{item.available_points}" if item.available_points else f"{item.name} --"
+        for item in assessment.dimensions
+    )
+    tags = "；".join(tag.title for tag in assessment.tags[:3]) or "无突出风险标签"
+    return [
+        f"- 维度得分 `{assessment.earned_points}/{assessment.available_points}`{normalized}｜数据完整度 {assessment.completeness:.0%}",
+        f"- {dimensions}",
+        f"- 风险：{tags}",
+    ]
+
+
 def render_markdown(report: ScanReport, *, max_chars: int = 3800) -> list[str]:
     header = [
         TITLE,
@@ -50,10 +65,19 @@ def render_markdown(report: ScanReport, *, max_chars: int = 3800) -> list[str]:
     body: list[str] = []
     if not report.candidates:
         body.append("## 今日无符合条件标的")
+    assessment_by_symbol = {
+        assessment.candidate.signal.symbol: assessment
+        for assessment in report.assessments
+        if assessment.candidate is not None
+    }
     for item in report.candidates:
         body.extend(_candidate_lines(item))
+        assessment = assessment_by_symbol.get(item.signal.symbol)
+        if assessment:
+            body.extend(_assessment_lines(assessment))
     if report.failures:
         body.append(f"> 数据异常标的：{', '.join(report.failures)}")
+    body.append("> 观察分基于当前可用数据，不代表胜率或涨跌预测。")
     body.append(DISCLAIMER)
 
     chunks: list[str] = []

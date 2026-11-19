@@ -84,7 +84,14 @@ def _status_style(status: str) -> tuple[str, str]:
 def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
     path = resolve_font_path(font_path)
     candidates = tuple(_candidate_view(item) for item in report.candidates)
-    content_height = max(300, len(candidates) * 220)
+    assessment_by_symbol = {
+        assessment.candidate.signal.symbol: assessment
+        for assessment in report.assessments
+        if assessment.candidate is not None
+    }
+    card_height = 280 if assessment_by_symbol else 200
+    card_step = card_height + 20
+    content_height = max(300, len(candidates) * card_step)
     height = 360 + content_height + (90 if report.failures else 0) + 110
     image = Image.new("RGB", (WIDTH, height), "#f4f7fb")
     draw = ImageDraw.Draw(image)
@@ -134,8 +141,8 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
     else:
         for item in candidates:
             accent, soft = _status_style(item.status)
-            draw.rounded_rectangle((36, y, 824, y + 200), radius=24, fill="#ffffff")
-            draw.rounded_rectangle((36, y, 46, y + 200), radius=5, fill=accent)
+            draw.rounded_rectangle((36, y, 824, y + card_height), radius=24, fill="#ffffff")
+            draw.rounded_rectangle((36, y, 46, y + card_height), radius=5, fill=accent)
             _text(draw, (76, y + 28), item.symbol, bold_34, "#0e2a50")
             _text(draw, (225, y + 39), item.trigger, regular_20, "#687690")
             pill_left = 650
@@ -151,7 +158,19 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
             _text(draw, (235, y + 140), item.reference_range, regular_24, "#142a4b")
             _text(draw, (515, y + 140), "失效位", regular_20, "#687690")
             _text(draw, (590, y + 140), item.invalidation, regular_24, "#142a4b")
-            y += 220
+            assessment = assessment_by_symbol.get(item.symbol)
+            if assessment:
+                total = f"{assessment.earned_points}/{assessment.available_points}"
+                normalized = f" · 观察分 {assessment.normalized_score}" if assessment.normalized_score is not None else " · 观察分 --"
+                _text(draw, (76, y + 185), f"维度 {total}{normalized} · 完整度 {assessment.completeness:.0%}", regular_20, "#17345b")
+                dimension_text = " · ".join(
+                    f"{score.name}{score.earned_points}/{score.available_points}" if score.available_points else f"{score.name}--"
+                    for score in assessment.dimensions
+                )
+                _text(draw, (76, y + 220), dimension_text[:52], regular_20, "#687690")
+                tags = " / ".join(tag.title for tag in assessment.tags[:3]) or "无突出风险标签"
+                _text(draw, (76, y + 250), tags[:36], regular_20, "#bd7000")
+            y += card_step
 
     if report.failures:
         draw.rounded_rectangle((36, y, 824, y + 66), radius=18, fill="#fff0f0")
@@ -164,3 +183,34 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
+
+
+def render_png_pages(report: ScanReport, *, font_path: str | None = None, cards_per_page: int = 3) -> tuple[bytes, ...]:
+    if len(report.candidates) <= cards_per_page:
+        return (render_png(report, font_path=font_path),)
+    pages = []
+    assessment_by_symbol = {
+        assessment.candidate.signal.symbol: assessment
+        for assessment in report.assessments
+        if assessment.candidate is not None
+    }
+    for start in range(0, len(report.candidates), cards_per_page):
+        candidates = report.candidates[start : start + cards_per_page]
+        assessments = tuple(
+            assessment_by_symbol[item.signal.symbol]
+            for item in candidates
+            if item.signal.symbol in assessment_by_symbol
+        )
+        page = ScanReport(
+            report.session,
+            report.spy_summary,
+            report.qqq_summary,
+            candidates,
+            report.failures if start == 0 else (),
+            assessments,
+        )
+        payload = render_png(page, font_path=font_path)
+        if len(payload) > 2 * 1024 * 1024:
+            raise ReportError("enterprise WeChat image exceeds 2 MB")
+        pages.append(payload)
+    return tuple(pages)
