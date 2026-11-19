@@ -18,6 +18,12 @@ def test_workflow_has_safe_schedule_and_manual_defaults():
     assert "github.run_id" in text
 
 
+def test_workflow_pins_stable_ubuntu_runner():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+    assert workflow["jobs"]["scan"]["runs-on"] == "ubuntu-24.04"
+
+
 def test_webhook_only_comes_from_github_secret():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "secrets.WECOM_WEBHOOK_URL" in text
