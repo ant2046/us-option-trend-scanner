@@ -76,3 +76,22 @@ def test_wecom_http_or_network_error_is_report_error():
     with pytest.raises(ReportError) as exc:
         WeComClient(url, session=FakeSession(error=TimeoutError("url secret"))).send("hello")
     assert "secret" not in str(exc.value)
+
+
+def test_stale_quote_does_not_render_numeric_price():
+    item = candidate()
+    stale = Candidate(item.signal, PremarketQuote("AAPL", QuoteStatus.STALE, 99, item.quote.observed_at), None, "数据异常")
+    text = render_markdown(report([stale]))[0]
+    assert "盘前 `--`" in text
+    assert "盘前 `99.00`" not in text
+
+
+def test_formatted_traceback_does_not_contain_webhook_key():
+    import traceback
+
+    url = "https://example.invalid/?key=traceback-secret"
+    try:
+        WeComClient(url, session=FakeSession(error=RuntimeError(url))).send("hello")
+    except ReportError as exc:
+        rendered = "".join(traceback.format_exception(exc))
+    assert "traceback-secret" not in rendered

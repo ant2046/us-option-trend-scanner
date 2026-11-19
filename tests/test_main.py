@@ -39,6 +39,9 @@ class FakeData:
 
 
 class FakeSignals:
+    def trend_qualifies(self, bars):
+        return True
+
     def evaluate(self, symbol, bars, qqq_trend_ok):
         return TrendSignal(symbol, date(2026, 11, 18), 100, 95, 90, 4, ("平台突破",), 92)
 
@@ -102,3 +105,15 @@ def test_dry_run_prints_without_constructing_sender():
 def test_send_failure_returns_delivery_failed():
     result = run_scan(deps(sender=Sender(fail=True)), now=NOW, send=True)
     assert result.status == RunStatus.DELIVERY_FAILED
+
+
+def test_qqq_trend_bonus_does_not_require_qqq_trigger():
+    class TrendOnlyQQQ(FakeSignals):
+        def evaluate(self, symbol, bars, qqq_trend_ok):
+            if symbol == "QQQ":
+                return None
+            assert qqq_trend_ok is True
+            return super().evaluate(symbol, bars, qqq_trend_ok)
+
+    dependencies = Dependencies(FakeCalendar(), FakeData(), TrendOnlyQQQ(), lambda: Sender(), lambda _: None)
+    assert run_scan(dependencies, now=NOW, send=False).status == RunStatus.SUCCESS

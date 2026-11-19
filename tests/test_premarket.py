@@ -41,3 +41,10 @@ def test_rank_by_score_then_smaller_absolute_gap_then_symbol():
         evaluate_premarket(signal("AAPL", 3), quote("AAPL", 100)),
     ]
     assert [item.signal.symbol for item in rank_candidates(items)] == ["NVDA", "TSLA", "AAPL"]
+
+
+def test_gap_limit_comes_from_settings():
+    from market_scanner.config import Settings
+
+    item = evaluate_premarket(signal(), quote(price=102.5), settings=Settings(gap_limit=0.02))
+    assert item.status == "跳空偏高，不追"

@@ -79,3 +79,32 @@ def test_premarket_marks_stale_and_missing_quotes():
 
     assert stale_data.premarket_quote("SPY", now).status == QuoteStatus.STALE
     assert empty_data.premarket_quote("SPY", now).status == QuoteStatus.MISSING
+
+
+def test_premarket_rejects_future_and_regular_session_bars():
+    now = datetime(2026, 11, 19, 8, 30, tzinfo=NY)
+    future = bars(pd.DatetimeIndex([datetime(2026, 11, 19, 8, 31, tzinfo=NY)]))
+    regular = bars(pd.DatetimeIndex([datetime(2026, 11, 19, 9, 34, tzinfo=NY)]))
+    future_data = YahooMarketData(ticker_factory=lambda _: FakeTicker([future]), sleep=lambda _: None)
+    regular_data = YahooMarketData(ticker_factory=lambda _: FakeTicker([regular]), sleep=lambda _: None)
+
+    assert future_data.premarket_quote("SPY", now).status == QuoteStatus.MISSING
+    assert regular_data.premarket_quote("SPY", datetime(2026, 11, 19, 9, 35, tzinfo=NY)).status == QuoteStatus.MISSING
+
+
+def test_daily_history_requires_immediately_previous_session():
+    frame = bars(pd.to_datetime(["2026-11-17"]))
+    data = YahooMarketData(ticker_factory=lambda _: FakeTicker([frame]), sleep=lambda _: None)
+
+    with pytest.raises(MarketDataError, match="previous session"):
+        data.daily_history("SPY", completed_before=datetime(2026, 11, 19, 8, 30, tzinfo=NY))
+
+
+def test_empty_daily_response_is_provider_failure():
+    empty = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    ticker = FakeTicker([empty, empty, empty])
+    data = YahooMarketData(ticker_factory=lambda _: ticker, sleep=lambda _: None)
+
+    with pytest.raises(MarketDataError, match="request failed"):
+        data.daily_history("SPY", completed_before=datetime(2026, 11, 19, 8, 30, tzinfo=NY))
+    assert len(ticker.calls) == 3

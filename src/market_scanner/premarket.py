@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from .config import Settings
 from .models import Candidate, PremarketQuote, QuoteStatus, TrendSignal
 
 
-def evaluate_premarket(signal: TrendSignal, quote: PremarketQuote) -> Candidate:
+def evaluate_premarket(
+    signal: TrendSignal, quote: PremarketQuote, *, settings: Settings | None = None
+) -> Candidate:
+    cfg = settings or Settings()
     if quote.status != QuoteStatus.OK or quote.price is None:
         return Candidate(signal, quote, None, "数据异常")
     change = quote.price / signal.close - 1
     if quote.price < max(signal.ma20, signal.invalidation):
         status = "信号失效"
-    elif quote.price > signal.close * 1.03:
+    elif quote.price > signal.close * (1 + cfg.gap_limit):
         status = "跳空偏高，不追"
     else:
         status = "允许关注"

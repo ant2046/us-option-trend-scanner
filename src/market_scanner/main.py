@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Callable
@@ -39,6 +39,7 @@ class Dependencies:
     signals: object
     sender_factory: Callable[[], object]
     output: Callable[[str], None] = print
+    settings: Settings = field(default_factory=Settings)
 
 
 def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
@@ -48,12 +49,14 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
 
     signals = {}
     failures: list[str] = []
+    qqq_trend_ok = False
     order = ("QQQ",) + tuple(symbol for symbol in SYMBOLS if symbol != "QQQ")
     for symbol in order:
         try:
             bars = deps.data.daily_history(symbol, session.opens_at)
-            qqq_ok = signals.get("QQQ") is not None
-            signals[symbol] = deps.signals.evaluate(symbol, bars, qqq_ok)
+            if symbol == "QQQ":
+                qqq_trend_ok = deps.signals.trend_qualifies(bars)
+            signals[symbol] = deps.signals.evaluate(symbol, bars, qqq_trend_ok)
         except Exception:
             failures.append(symbol)
             signals[symbol] = None
@@ -64,7 +67,7 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         if signal is None:
             continue
         quote = deps.data.premarket_quote(symbol, now)
-        candidates.append(evaluate_premarket(signal, quote))
+        candidates.append(evaluate_premarket(signal, quote, settings=deps.settings))
     candidates = rank_candidates(candidates)
 
     report = ScanReport(
@@ -94,8 +97,9 @@ def _dependencies(settings: Settings) -> Dependencies:
     return Dependencies(
         calendar=MarketSessionService(),
         data=YahooMarketData(stale_minutes=settings.quote_stale_minutes),
-        signals=SignalEngine(),
+        signals=SignalEngine(settings),
         sender_factory=lambda: WeComClient(settings.wecom_webhook_url or ""),
+        settings=settings,
     )
 
 

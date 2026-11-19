@@ -13,7 +13,7 @@ on:
         default: false
 
 concurrency:
-  group: premarket-trend-scan
+  group: premarket-trend-scan-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'scheduled' }}
   cancel-in-progress: false
 
 jobs:

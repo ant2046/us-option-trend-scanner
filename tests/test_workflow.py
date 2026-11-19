@@ -13,6 +13,7 @@ def test_workflow_has_safe_schedule_and_manual_defaults():
     assert "python -m market_scanner.main --send" in text
     assert "python -m market_scanner.main --dry-run" in text
     assert "concurrency:" in text
+    assert "github.run_id" in text
 
 
 def test_webhook_only_comes_from_github_secret():

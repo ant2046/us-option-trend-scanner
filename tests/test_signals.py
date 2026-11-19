@@ -78,3 +78,30 @@ def test_nan_rows_do_not_count_toward_minimum_history():
     bars.loc[bars.index[:6], "Close"] = np.nan
 
     assert SignalEngine().evaluate("AAPL", bars, True) is None
+
+
+def test_duplicate_dates_do_not_count_toward_minimum_history():
+    bars = make_bars(59)
+    duplicated = pd.concat([bars.iloc[[0]], bars])
+
+    assert SignalEngine().evaluate("AAPL", duplicated, True) is None
+
+
+def test_mandatory_trend_can_qualify_without_trigger():
+    bars = make_bars()
+    bars["Volume"] = 1
+
+    engine = SignalEngine()
+
+    assert engine.trend_qualifies(bars) is True
+    assert engine.evaluate("QQQ", bars, None) is None
+
+
+def test_settings_change_signal_thresholds():
+    from market_scanner.config import Settings
+
+    bars = make_bars()
+    previous_high = bars["High"].iloc[-11:-1].max()
+    bars.loc[bars.index[-1], ["Close", "High", "Volume"]] = [previous_high + 1, previous_high + 1.5, 1300]
+
+    assert SignalEngine(Settings(breakout_volume_ratio=1.4)).evaluate("NVDA", bars, True) is None

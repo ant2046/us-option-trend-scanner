@@ -6,6 +6,7 @@ from typing import Callable
 
 import pandas as pd
 import yfinance as yf
+import exchange_calendars as xcals
 
 from .models import PremarketQuote, QuoteStatus
 
@@ -24,16 +25,21 @@ class YahooMarketData:
         ticker_factory: Callable[[str], object] = yf.Ticker,
         sleep: Callable[[float], None] = time.sleep,
         stale_minutes: int = 15,
+        calendar=None,
     ):
         self._ticker_factory = ticker_factory
         self._sleep = sleep
         self._stale_minutes = stale_minutes
+        self._calendar = calendar or xcals.get_calendar("XNYS")
 
-    def _history(self, symbol: str, **kwargs) -> pd.DataFrame:
+    def _history(self, symbol: str, *, require_nonempty: bool = False, **kwargs) -> pd.DataFrame:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                return self._ticker_factory(symbol).history(timeout=10, **kwargs)
+                frame = self._ticker_factory(symbol).history(timeout=10, **kwargs)
+                if require_nonempty and frame.empty:
+                    raise ValueError("empty provider response")
+                return frame
             except Exception as exc:  # provider exceptions are not stable types
                 last_error = exc
                 if attempt < 2:
@@ -46,12 +52,20 @@ class YahooMarketData:
             period="6mo",
             interval="1d",
             auto_adjust=True,
+            require_nonempty=True,
         )
         missing = [column for column in REQUIRED_COLUMNS if column not in frame.columns]
         if missing:
             raise MarketDataError(f"{symbol}: missing columns {', '.join(missing)}")
         result = frame.loc[pd.DatetimeIndex(frame.index).date < completed_before.date(), list(REQUIRED_COLUMNS)]
-        return result.dropna(how="all").copy()
+        result = result.dropna(how="all").copy()
+        if result.empty:
+            raise MarketDataError(f"{symbol}: no usable daily data")
+        current_label = pd.Timestamp(completed_before.date())
+        expected = self._calendar.previous_session(current_label).date()
+        if pd.Timestamp(result.index[-1]).date() != expected:
+            raise MarketDataError(f"{symbol}: latest bar is not the previous session")
+        return result
 
     def premarket_quote(self, symbol: str, now: datetime) -> PremarketQuote:
         try:
@@ -66,7 +80,19 @@ class YahooMarketData:
             return PremarketQuote(symbol, QuoteStatus.ERROR, None, None, str(exc))
         if frame.empty or "Close" not in frame.columns:
             return PremarketQuote(symbol, QuoteStatus.MISSING, None, None, "no premarket quote")
-        closes = frame["Close"].dropna()
+        index = pd.DatetimeIndex(frame.index)
+        if index.tz is None:
+            index = index.tz_localize(now.tzinfo)
+        else:
+            index = index.tz_convert(now.tzinfo)
+        local_time = index.time
+        valid = (
+            (index.date == now.date())
+            & (index <= pd.Timestamp(now))
+            & (local_time >= datetime.strptime("04:00", "%H:%M").time())
+            & (local_time < datetime.strptime("09:30", "%H:%M").time())
+        )
+        closes = frame.loc[valid, "Close"].dropna()
         if closes.empty:
             return PremarketQuote(symbol, QuoteStatus.MISSING, None, None, "no premarket quote")
         observed = pd.Timestamp(closes.index[-1]).to_pydatetime()

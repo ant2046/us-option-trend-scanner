@@ -26,7 +26,11 @@ class ScanReport:
 
 def _candidate_lines(item: Candidate) -> list[str]:
     signal = item.signal
-    quote_price = f"{item.quote.price:.2f}" if item.quote.price is not None else "--"
+    quote_price = (
+        f"{item.quote.price:.2f}"
+        if item.quote.status.value == "ok" and item.quote.price is not None
+        else "--"
+    )
     change = f"{item.premarket_change:+.2%}" if item.premarket_change is not None else "--"
     return [
         f"## {signal.symbol} · {' / '.join(signal.triggers)} · {signal.score}/4",
@@ -78,6 +82,6 @@ class WeComClient:
             response.raise_for_status()
             payload = response.json()
         except Exception as exc:
-            raise ReportError("enterprise WeChat webhook request failed") from exc
+            raise ReportError("enterprise WeChat webhook request failed") from None
         if payload.get("errcode") != 0:
             raise ReportError(f"enterprise WeChat returned errcode {payload.get('errcode')}")
