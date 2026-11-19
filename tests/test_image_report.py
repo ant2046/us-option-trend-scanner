@@ -67,12 +67,13 @@ def test_resolve_font_path_raises_clear_error_when_no_font_exists(monkeypatch):
 
 
 def test_font_resolution_skips_existing_invalid_or_non_cjk_files(monkeypatch, tmp_path):
+    valid_font = resolve_font_path()
     invalid = tmp_path / "not-a-font.ttf"
     invalid.write_text("not a font", encoding="utf-8")
     monkeypatch.delenv("SCANNER_FONT_PATH", raising=False)
     monkeypatch.setattr(
         "market_scanner.image_report._FONT_CANDIDATES",
-        (str(invalid), r"C:\Windows\Fonts\arial.ttf", FONT_PATH),
+        (str(invalid), r"C:\Windows\Fonts\arial.ttf", valid_font),
     )
 
-    assert resolve_font_path() == FONT_PATH
+    assert resolve_font_path() == valid_font
