@@ -108,3 +108,14 @@ def test_empty_daily_response_is_provider_failure():
     with pytest.raises(MarketDataError, match="request failed"):
         data.daily_history("SPY", completed_before=datetime(2026, 11, 19, 8, 30, tzinfo=NY))
     assert len(ticker.calls) == 3
+
+
+def test_daily_history_rejects_partial_previous_session_bar():
+    frame = bars(
+        pd.to_datetime(["2026-11-17", "2026-11-18"]),
+        Volume=[1000, float("nan")],
+    )
+    data = YahooMarketData(ticker_factory=lambda _: FakeTicker([frame]), sleep=lambda _: None)
+
+    with pytest.raises(MarketDataError, match="previous session"):
+        data.daily_history("SPY", completed_before=datetime(2026, 11, 19, 8, 30, tzinfo=NY))

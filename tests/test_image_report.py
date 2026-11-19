@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from PIL import Image
 
-from market_scanner.image_report import _candidate_view, render_png, resolve_font_path
+from market_scanner.image_report import _candidate_view, _status_style, render_png, resolve_font_path
 from market_scanner.models import Candidate, MarketSession, PremarketQuote, QuoteStatus, TrendSignal
 from market_scanner.report import ReportError, ScanReport
 
@@ -45,9 +45,34 @@ def test_candidate_view_hides_numeric_price_for_stale_quote():
     assert "99.00" not in view.quote_price
 
 
+def test_candidate_view_exposes_ma20_reference_range():
+    view = _candidate_view(make_candidate())
+
+    assert view.reference_range == "93.10–96.90"
+
+
+def test_invalid_or_anomalous_status_is_never_green():
+    assert _status_style("允许关注")[0] == "#07855d"
+    assert _status_style("信号失效")[0] == "#c64242"
+    assert _status_style("数据异常")[0] == "#c64242"
+    assert _status_style("跳空偏高不追")[0] == "#bd7000"
+
+
 def test_resolve_font_path_raises_clear_error_when_no_font_exists(monkeypatch):
     monkeypatch.delenv("SCANNER_FONT_PATH", raising=False)
     monkeypatch.setattr("market_scanner.image_report._FONT_CANDIDATES", ())
 
     with pytest.raises(ReportError, match="CJK font"):
         resolve_font_path()
+
+
+def test_font_resolution_skips_existing_invalid_or_non_cjk_files(monkeypatch, tmp_path):
+    invalid = tmp_path / "not-a-font.ttf"
+    invalid.write_text("not a font", encoding="utf-8")
+    monkeypatch.delenv("SCANNER_FONT_PATH", raising=False)
+    monkeypatch.setattr(
+        "market_scanner.image_report._FONT_CANDIDATES",
+        (str(invalid), r"C:\Windows\Fonts\arial.ttf", FONT_PATH),
+    )
+
+    assert resolve_font_path() == FONT_PATH

@@ -29,6 +29,7 @@ class CandidateView:
     change: str
     close: str
     ma20: str
+    reference_range: str
     invalidation: str
 
 
@@ -42,14 +43,24 @@ def _candidate_view(item: Candidate) -> CandidateView:
         change=f"{item.premarket_change:+.1%}" if quote_ok and item.premarket_change is not None else "--",
         close=f"{item.signal.close:.2f}",
         ma20=f"{item.signal.ma20:.2f}",
+        reference_range=f"{item.signal.ma20 * 0.98:.2f}–{item.signal.ma20 * 1.02:.2f}",
         invalidation=f"{item.signal.invalidation:.2f}",
     )
+
+
+def _font_supports_report_text(path: str) -> bool:
+    try:
+        font = ImageFont.truetype(path, size=24)
+        masks = [bytes(font.getmask(char)) for char in "美股盘前"]
+    except (OSError, ValueError):
+        return False
+    return all(any(mask) for mask in masks) and len(set(masks)) >= 4
 
 
 def resolve_font_path(explicit: str | None = None) -> str:
     candidates = (explicit, os.getenv("SCANNER_FONT_PATH"), *_FONT_CANDIDATES)
     for candidate in candidates:
-        if candidate and Path(candidate).is_file():
+        if candidate and Path(candidate).is_file() and _font_supports_report_text(str(candidate)):
             return str(candidate)
     raise ReportError("a CJK font is required; set SCANNER_FONT_PATH")
 
@@ -60,6 +71,14 @@ def _font(path: str, size: int, *, index: int = 0) -> ImageFont.FreeTypeFont:
 
 def _text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], value: str, font, fill: str) -> None:
     draw.text(xy, value, font=font, fill=fill)
+
+
+def _status_style(status: str) -> tuple[str, str]:
+    if status == "允许关注":
+        return "#07855d", "#e6f6ef"
+    if "失效" in status or "异常" in status:
+        return "#c64242", "#fde8e8"
+    return "#bd7000", "#fff1d8"
 
 
 def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
@@ -87,8 +106,14 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
         regular_20,
         "#c0d1e9",
     )
-    draw.ellipse((690, 52, 708, 70), fill="#43d09a")
-    _text(draw, (720, 45), "市场正常", regular_20, "#b8f0dc")
+    if len(report.failures) >= 9:
+        market_label, market_color = "数据不可用", "#ffadad"
+    elif report.failures:
+        market_label, market_color = "部分数据异常", "#ffd38a"
+    else:
+        market_label, market_color = "市场正常", "#b8f0dc"
+    draw.ellipse((650, 52, 668, 70), fill=market_color)
+    _text(draw, (680, 45), market_label, regular_20, market_color)
 
     draw.rounded_rectangle((36, 260, 824, 335), radius=24, fill="#ffffff")
     summaries = (("SPY", report.spy_summary), ("QQQ", report.qqq_summary), ("入选", str(len(candidates))))
@@ -108,9 +133,7 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
         y += 230
     else:
         for item in candidates:
-            warning = any(word in item.status for word in ("不", "等待", "异常"))
-            accent = "#bd7000" if warning else "#07855d"
-            soft = "#fff1d8" if warning else "#e6f6ef"
+            accent, soft = _status_style(item.status)
             draw.rounded_rectangle((36, y, 824, y + 200), radius=24, fill="#ffffff")
             draw.rounded_rectangle((36, y, 46, y + 200), radius=5, fill=accent)
             _text(draw, (76, y + 28), item.symbol, bold_34, "#0e2a50")
@@ -124,10 +147,10 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
             _text(draw, (380, y + 86), item.change, regular_24, accent)
             _text(draw, (525, y + 86), "前收", regular_20, "#687690")
             _text(draw, (590, y + 86), item.close, regular_24, "#142a4b")
-            _text(draw, (76, y + 140), "MA20", regular_20, "#687690")
-            _text(draw, (145, y + 140), item.ma20, regular_24, "#142a4b")
-            _text(draw, (315, y + 140), "参考失效位", regular_20, "#687690")
-            _text(draw, (450, y + 140), item.invalidation, regular_24, "#142a4b")
+            _text(draw, (76, y + 140), "MA20参考区间", regular_20, "#687690")
+            _text(draw, (235, y + 140), item.reference_range, regular_24, "#142a4b")
+            _text(draw, (515, y + 140), "失效位", regular_20, "#687690")
+            _text(draw, (590, y + 140), item.invalidation, regular_24, "#142a4b")
             y += 220
 
     if report.failures:

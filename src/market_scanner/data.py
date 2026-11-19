@@ -58,7 +58,7 @@ class YahooMarketData:
         if missing:
             raise MarketDataError(f"{symbol}: missing columns {', '.join(missing)}")
         result = frame.loc[pd.DatetimeIndex(frame.index).date < completed_before.date(), list(REQUIRED_COLUMNS)]
-        result = result.dropna(how="all").copy()
+        result = result.dropna(subset=list(REQUIRED_COLUMNS)).copy()
         if result.empty:
             raise MarketDataError(f"{symbol}: no usable daily data")
         current_label = pd.Timestamp(completed_before.date())

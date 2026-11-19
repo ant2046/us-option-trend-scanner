@@ -51,32 +51,44 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
     signals = {}
     failures: list[str] = []
     qqq_trend_ok = False
+    benchmark_trends: dict[str, bool | None] = {"SPY": None, "QQQ": None}
     order = ("QQQ",) + tuple(symbol for symbol in SYMBOLS if symbol != "QQQ")
     for symbol in order:
         try:
             bars = deps.data.daily_history(symbol, session.opens_at)
+            if symbol in benchmark_trends:
+                benchmark_trends[symbol] = deps.signals.trend_qualifies(bars)
             if symbol == "QQQ":
-                qqq_trend_ok = deps.signals.trend_qualifies(bars)
+                qqq_trend_ok = bool(benchmark_trends[symbol])
             signals[symbol] = deps.signals.evaluate(symbol, bars, qqq_trend_ok)
         except Exception:
             failures.append(symbol)
             signals[symbol] = None
 
     candidates = []
+    quote_failures: list[str] = []
     for symbol in SYMBOLS:
         signal = signals.get(symbol)
         if signal is None:
             continue
         quote = deps.data.premarket_quote(symbol, now)
+        if quote.status.value != "ok":
+            quote_failures.append(symbol)
         candidates.append(evaluate_premarket(signal, quote, settings=deps.settings))
     candidates = rank_candidates(candidates)
 
+    def benchmark_summary(symbol: str) -> str:
+        trend = benchmark_trends[symbol]
+        if trend is None:
+            return f"{symbol} 数据异常"
+        return f"{symbol} 趋势合格" if trend else f"{symbol} 趋势不合格"
+
     report = ScanReport(
         session=session,
-        spy_summary="SPY 合格" if signals.get("SPY") else "SPY 无触发",
-        qqq_summary="QQQ 合格" if signals.get("QQQ") else "QQQ 无触发",
+        spy_summary=benchmark_summary("SPY"),
+        qqq_summary=benchmark_summary("QQQ"),
         candidates=tuple(candidates),
-        failures=tuple(failures),
+        failures=tuple(dict.fromkeys((*failures, *quote_failures))),
     )
     if send:
         try:

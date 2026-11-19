@@ -133,3 +133,40 @@ def test_qqq_trend_bonus_does_not_require_qqq_trigger():
 
     dependencies = Dependencies(FakeCalendar(), FakeData(), TrendOnlyQQQ(), lambda: Sender(), lambda _: None)
     assert run_scan(dependencies, now=NOW, send=False).status == RunStatus.SUCCESS
+
+
+def test_report_separates_benchmark_trend_from_trigger_and_lists_quote_anomalies(monkeypatch):
+    captured = []
+
+    class TrendOnlyQQQ(FakeSignals):
+        def evaluate(self, symbol, bars, qqq_trend_ok):
+            if symbol == "QQQ":
+                return None
+            return super().evaluate(symbol, bars, qqq_trend_ok)
+
+    class StaleData(FakeData):
+        def premarket_quote(self, symbol, now):
+            if symbol == "TSLA":
+                return PremarketQuote(symbol, QuoteStatus.STALE, 99, now)
+            return super().premarket_quote(symbol, now)
+
+    def capture(report):
+        captured.append(report)
+        return b"png"
+
+    monkeypatch.setattr("market_scanner.main.render_png", capture)
+    dependencies = Dependencies(FakeCalendar(), StaleData(), TrendOnlyQQQ(), lambda: Sender(), lambda _: None)
+
+    assert run_scan(dependencies, now=NOW, send=True).status == RunStatus.SUCCESS
+    assert captured[0].qqq_summary == "QQQ 趋势合格"
+    assert "TSLA" in captured[0].failures
+
+
+def test_all_daily_failures_report_market_data_unavailable(monkeypatch):
+    captured = []
+    monkeypatch.setattr("market_scanner.main.render_png", lambda report: captured.append(report) or b"png")
+    data = FakeData(failing=("SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"))
+
+    assert run_scan(deps(data), now=NOW, send=True).status == RunStatus.DATA_FAILED
+    assert captured[0].spy_summary == "SPY 数据异常"
+    assert captured[0].qqq_summary == "QQQ 数据异常"
