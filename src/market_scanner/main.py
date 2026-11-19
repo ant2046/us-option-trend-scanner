@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from .calendar import MarketSessionService
 from .config import ConfigError, Settings, SYMBOLS
 from .data import YahooMarketData
+from .image_report import render_png
 from .premarket import evaluate_premarket, rank_candidates
 from .report import ScanReport, WeComClient, render_markdown
 from .signals import SignalEngine
@@ -77,15 +78,15 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         candidates=tuple(candidates),
         failures=tuple(failures),
     )
-    chunks = render_markdown(report)
     if send:
         try:
+            image_bytes = render_png(report)
             sender = deps.sender_factory()
-            for chunk in chunks:
-                sender.send(chunk)
+            sender.send_image(image_bytes)
         except Exception:
             return RunResult(RunStatus.DELIVERY_FAILED, len(candidates), len(failures))
     else:
+        chunks = render_markdown(report)
         for chunk in chunks:
             deps.output(chunk)
 

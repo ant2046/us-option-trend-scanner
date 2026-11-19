@@ -49,12 +49,18 @@ class FakeSignals:
 class Sender:
     def __init__(self, fail=False):
         self.messages = []
+        self.images = []
         self.fail = fail
 
     def send(self, message):
         if self.fail:
             raise RuntimeError("send failed")
         self.messages.append(message)
+
+    def send_image(self, image_bytes):
+        if self.fail:
+            raise RuntimeError("send failed")
+        self.images.append(image_bytes)
 
 
 def deps(data=None, opened=True, sender=None, output=None):
@@ -71,21 +77,22 @@ def test_closed_market_skips_data_and_send():
     assert sender.messages == []
 
 
-def test_normal_flow_fetches_qqq_first_and_sends_once():
+def test_normal_flow_fetches_qqq_first_and_sends_one_png():
     data = FakeData()
     sender = Sender()
     result = run_scan(deps(data, sender=sender), now=NOW, send=True)
     assert result.status == RunStatus.SUCCESS
     assert data.daily_calls[0] == "QQQ"
-    assert len(sender.messages) == 1
-    assert "AAPL" in sender.messages[0]
+    assert sender.messages == []
+    assert len(sender.images) == 1
+    assert sender.images[0].startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_one_symbol_failure_is_listed_but_scan_succeeds():
     sender = Sender()
     result = run_scan(deps(FakeData(failing=("TSLA",)), sender=sender), now=NOW, send=True)
     assert result.status == RunStatus.SUCCESS
-    assert "TSLA" in sender.messages[0]
+    assert len(sender.images) == 1
 
 
 def test_all_daily_failures_return_data_failed():
@@ -105,6 +112,15 @@ def test_dry_run_prints_without_constructing_sender():
 def test_send_failure_returns_delivery_failed():
     result = run_scan(deps(sender=Sender(fail=True)), now=NOW, send=True)
     assert result.status == RunStatus.DELIVERY_FAILED
+
+
+def test_image_render_failure_returns_delivery_failed(monkeypatch):
+    def fail_render(report):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr("market_scanner.main.render_png", fail_render)
+
+    assert run_scan(deps(), now=NOW, send=True).status == RunStatus.DELIVERY_FAILED
 
 
 def test_qqq_trend_bonus_does_not_require_qqq_trigger():
