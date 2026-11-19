@@ -1,0 +1,51 @@
+import pytest
+
+from market_scanner.config import ConfigError, Settings, SYMBOLS
+
+
+def test_symbols_and_default_thresholds_are_fixed(monkeypatch):
+    monkeypatch.delenv("WECOM_WEBHOOK_URL", raising=False)
+
+    settings = Settings.from_env(require_webhook=False)
+
+    assert SYMBOLS == (
+        "SPY",
+        "QQQ",
+        "AAPL",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "NVDA",
+        "META",
+        "TSLA",
+    )
+    assert settings.ma_short == 20
+    assert settings.ma_long == 50
+    assert settings.slope_lookback == 5
+    assert settings.breakout_lookback == 10
+    assert settings.pullback_band == pytest.approx(0.02)
+    assert settings.breakout_volume_ratio == pytest.approx(1.2)
+    assert settings.gap_limit == pytest.approx(0.03)
+
+
+def test_send_mode_requires_webhook(monkeypatch):
+    monkeypatch.delenv("WECOM_WEBHOOK_URL", raising=False)
+
+    with pytest.raises(ConfigError, match="WECOM_WEBHOOK_URL"):
+        Settings.from_env(require_webhook=True)
+
+
+def test_dry_run_does_not_require_webhook(monkeypatch):
+    monkeypatch.delenv("WECOM_WEBHOOK_URL", raising=False)
+
+    assert Settings.from_env(require_webhook=False).wecom_webhook_url is None
+
+
+def test_settings_repr_redacts_webhook(monkeypatch):
+    secret = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=super-secret"
+    monkeypatch.setenv("WECOM_WEBHOOK_URL", secret)
+
+    settings = Settings.from_env(require_webhook=True)
+
+    assert secret not in repr(settings)
+    assert "super-secret" not in repr(settings)
