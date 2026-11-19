@@ -26,6 +26,16 @@ def test_symbols_and_default_thresholds_are_fixed(monkeypatch):
     assert settings.pullback_band == pytest.approx(0.02)
     assert settings.breakout_volume_ratio == pytest.approx(1.2)
     assert settings.gap_limit == pytest.approx(0.03)
+    assert settings.earnings_warning_days == 3
+    assert settings.option_expiry_min_days == 14
+    assert settings.option_expiry_max_days == 45
+    assert settings.option_max_spread_ratio == pytest.approx(0.10)
+    assert settings.option_min_volume == 100
+    assert settings.option_min_open_interest == 500
+    assert settings.enrichment_timeout_seconds == 60
+    assert settings.provider_timeout_seconds == 10
+    assert settings.enrichment_workers == 4
+    assert settings.normalized_score_min_completeness == pytest.approx(0.70)
 
 
 def test_send_mode_requires_webhook(monkeypatch):

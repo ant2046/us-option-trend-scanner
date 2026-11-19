@@ -32,6 +32,16 @@ class Settings:
     breakout_volume_ratio: float = 1.2
     gap_limit: float = 0.03
     quote_stale_minutes: int = 15
+    earnings_warning_days: int = 3
+    option_expiry_min_days: int = 14
+    option_expiry_max_days: int = 45
+    option_max_spread_ratio: float = 0.10
+    option_min_volume: int = 100
+    option_min_open_interest: int = 500
+    enrichment_timeout_seconds: int = 60
+    provider_timeout_seconds: int = 10
+    enrichment_workers: int = 4
+    normalized_score_min_completeness: float = 0.70
     wecom_webhook_url: str | None = field(default=None, repr=False)
 
     @classmethod
