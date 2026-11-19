@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
+import hashlib
 
 import requests
 
@@ -73,10 +75,26 @@ class WeComClient:
         self._session = session or requests.Session()
 
     def send(self, markdown: str) -> None:
+        self._post({"msgtype": "markdown", "markdown": {"content": markdown}})
+
+    def send_image(self, image_bytes: bytes) -> None:
+        if len(image_bytes) > 2 * 1024 * 1024:
+            raise ReportError("enterprise WeChat image exceeds 2 MB")
+        self._post(
+            {
+                "msgtype": "image",
+                "image": {
+                    "base64": base64.b64encode(image_bytes).decode("ascii"),
+                    "md5": hashlib.md5(image_bytes).hexdigest(),
+                },
+            }
+        )
+
+    def _post(self, payload: dict) -> None:
         try:
             response = self._session.post(
                 self._webhook_url,
-                json={"msgtype": "markdown", "markdown": {"content": markdown}},
+                json=payload,
                 timeout=10,
             )
             response.raise_for_status()

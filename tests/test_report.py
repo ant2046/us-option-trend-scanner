@@ -1,3 +1,5 @@
+import base64
+import hashlib
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -51,8 +53,10 @@ class FakeSession:
     def __init__(self, response=None, error=None):
         self.response = response
         self.error = error
+        self.calls = []
 
     def post(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
         if self.error:
             raise self.error
         return self.response
@@ -95,3 +99,36 @@ def test_formatted_traceback_does_not_contain_webhook_key():
     except ReportError as exc:
         rendered = "".join(traceback.format_exception(exc))
     assert "traceback-secret" not in rendered
+
+
+def test_wecom_image_payload_contains_original_bytes_and_md5():
+    image_bytes = b"\x89PNG\r\n\x1a\nreal-image"
+    session = FakeSession(FakeResponse())
+
+    WeComClient("https://example.invalid/?key=secret", session=session).send_image(image_bytes)
+
+    payload = session.calls[0][1]["json"]
+    assert payload["msgtype"] == "image"
+    assert base64.b64decode(payload["image"]["base64"]) == image_bytes
+    assert payload["image"]["md5"] == hashlib.md5(image_bytes).hexdigest()
+
+
+def test_wecom_image_over_two_megabytes_fails_before_http_request():
+    session = FakeSession(FakeResponse())
+    client = WeComClient("https://example.invalid/?key=secret", session=session)
+
+    with pytest.raises(ReportError, match="2 MB"):
+        client.send_image(b"x" * (2 * 1024 * 1024 + 1))
+
+    assert session.calls == []
+
+
+def test_wecom_image_failure_redacts_secret():
+    url = "https://example.invalid/?key=image-secret"
+    session = FakeSession(FakeResponse(payload={"errcode": 93000, "errmsg": url}))
+
+    with pytest.raises(ReportError) as exc:
+        WeComClient(url, session=session).send_image(b"png")
+
+    assert "93000" in str(exc.value)
+    assert "image-secret" not in str(exc.value)
