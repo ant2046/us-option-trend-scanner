@@ -4,8 +4,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
-from market_scanner.data import MarketDataError, YahooMarketData
-from market_scanner.models import QuoteStatus
+from market_scanner.data import FallbackMarketData, MarketDataError, YahooMarketData
+from market_scanner.models import PremarketQuote, QuoteStatus
 
 
 NY = ZoneInfo("America/New_York")
@@ -119,3 +119,83 @@ def test_daily_history_rejects_partial_previous_session_bar():
 
     with pytest.raises(MarketDataError, match="previous session"):
         data.daily_history("SPY", completed_before=datetime(2026, 11, 19, 8, 30, tzinfo=NY))
+
+
+class Provider:
+    def __init__(self, *, daily=None, quote=None, daily_error=None):
+        self.daily = daily
+        self.quote = quote
+        self.daily_error = daily_error
+        self.daily_calls = 0
+        self.quote_calls = 0
+
+    def daily_history(self, symbol, completed_before):
+        self.daily_calls += 1
+        if self.daily_error:
+            raise self.daily_error
+        return self.daily
+
+    def premarket_quote(self, symbol, now):
+        self.quote_calls += 1
+        return self.quote
+
+
+def valid_frame():
+    return bars(pd.to_datetime(["2026-11-19"]))
+
+
+def fallback_quote(status, price=None, minute=20):
+    observed = datetime(2026, 11, 20, 8, minute, tzinfo=NY) if price is not None else None
+    return PremarketQuote("SPY", status, price, observed, status.value)
+
+
+def test_fallback_market_data_uses_primary_without_calling_backup():
+    primary = Provider(daily=valid_frame(), quote=fallback_quote(QuoteStatus.OK, 101))
+    backup = Provider(daily=valid_frame(), quote=fallback_quote(QuoteStatus.OK, 102))
+    data = FallbackMarketData(primary, backup)
+
+    assert data.daily_history("SPY", datetime(2026, 11, 20, 9, 30, tzinfo=NY)).iloc[-1]["Close"] == 10.5
+    assert data.premarket_quote("SPY", datetime(2026, 11, 20, 8, 30, tzinfo=NY)).price == 101
+    assert backup.daily_calls == 0
+    assert backup.quote_calls == 0
+
+
+@pytest.mark.parametrize("primary_daily", [pd.DataFrame(), None])
+def test_fallback_market_data_uses_backup_for_invalid_daily_frame(primary_daily):
+    primary = Provider(daily=primary_daily)
+    backup = Provider(daily=valid_frame())
+
+    result = FallbackMarketData(primary, backup).daily_history("SPY", datetime(2026, 11, 20, 9, 30, tzinfo=NY))
+
+    assert result.iloc[-1]["Close"] == 10.5
+    assert backup.daily_calls == 1
+
+
+def test_fallback_market_data_uses_backup_after_daily_exception():
+    primary = Provider(daily_error=MarketDataError("primary failed"))
+    backup = Provider(daily=valid_frame())
+
+    result = FallbackMarketData(primary, backup).daily_history("SPY", datetime(2026, 11, 20, 9, 30, tzinfo=NY))
+
+    assert result.iloc[-1]["Close"] == 10.5
+
+
+@pytest.mark.parametrize("status", [QuoteStatus.ERROR, QuoteStatus.MISSING, QuoteStatus.STALE])
+def test_fallback_market_data_uses_ok_backup_for_non_ok_primary(status):
+    primary = Provider(quote=fallback_quote(status, 99 if status == QuoteStatus.STALE else None, 10))
+    backup = Provider(quote=fallback_quote(QuoteStatus.OK, 101, 25))
+
+    result = FallbackMarketData(primary, backup).premarket_quote("SPY", datetime(2026, 11, 20, 8, 30, tzinfo=NY))
+
+    assert result.status == QuoteStatus.OK
+    assert result.price == 101
+
+
+def test_fallback_market_data_retains_stale_primary_when_backup_has_less_information():
+    primary = Provider(quote=fallback_quote(QuoteStatus.STALE, 99, 10))
+    backup = Provider(quote=fallback_quote(QuoteStatus.ERROR))
+
+    result = FallbackMarketData(primary, backup).premarket_quote("SPY", datetime(2026, 11, 20, 8, 30, tzinfo=NY))
+
+    assert result.status == QuoteStatus.STALE
+    assert result.price == 99

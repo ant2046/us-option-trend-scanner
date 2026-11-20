@@ -18,6 +18,53 @@ class MarketDataError(RuntimeError):
     """Raised when market data is unavailable or malformed."""
 
 
+class FallbackMarketData:
+    def __init__(self, primary, fallback):
+        self._primary = primary
+        self._fallback = fallback
+
+    @staticmethod
+    def _valid_daily(frame) -> bool:
+        return (
+            isinstance(frame, pd.DataFrame)
+            and not frame.empty
+            and all(column in frame.columns for column in REQUIRED_COLUMNS)
+        )
+
+    def daily_history(self, symbol: str, completed_before: datetime) -> pd.DataFrame:
+        try:
+            frame = self._primary.daily_history(symbol, completed_before)
+            if self._valid_daily(frame):
+                return frame
+        except Exception:
+            pass
+        return self._fallback.daily_history(symbol, completed_before)
+
+    @staticmethod
+    def _quote_rank(quote: PremarketQuote) -> tuple[int, float]:
+        status_rank = {
+            QuoteStatus.OK: 3,
+            QuoteStatus.STALE: 2,
+            QuoteStatus.MISSING: 1,
+            QuoteStatus.ERROR: 0,
+        }
+        timestamp = quote.observed_at.timestamp() if quote.observed_at is not None else float("-inf")
+        return status_rank.get(quote.status, 0), timestamp
+
+    def premarket_quote(self, symbol: str, now: datetime) -> PremarketQuote:
+        try:
+            primary = self._primary.premarket_quote(symbol, now)
+        except Exception as exc:
+            primary = PremarketQuote(symbol, QuoteStatus.ERROR, None, None, type(exc).__name__)
+        if primary.status == QuoteStatus.OK:
+            return primary
+        try:
+            fallback = self._fallback.premarket_quote(symbol, now)
+        except Exception as exc:
+            fallback = PremarketQuote(symbol, QuoteStatus.ERROR, None, None, type(exc).__name__)
+        return max((primary, fallback), key=self._quote_rank)
+
+
 class YahooMarketData:
     def __init__(
         self,
