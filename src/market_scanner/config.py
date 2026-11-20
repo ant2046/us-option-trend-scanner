@@ -40,6 +40,7 @@ class Settings:
     option_min_open_interest: int = 500
     enrichment_timeout_seconds: int = 60
     provider_timeout_seconds: int = 10
+    provider_retries: int = 1
     enrichment_workers: int = 4
     normalized_score_min_completeness: float = 0.70
     wecom_webhook_url: str | None = field(default=None, repr=False)

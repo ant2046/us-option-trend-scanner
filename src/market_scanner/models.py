@@ -38,6 +38,7 @@ class TrendSignal:
     score: int
     triggers: tuple[str, ...]
     invalidation: float
+    higher_range: bool = False
 
 
 @dataclass(frozen=True)

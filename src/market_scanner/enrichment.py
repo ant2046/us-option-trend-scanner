@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime
+from queue import Empty, Queue
+from threading import Thread
+from time import monotonic
 from typing import Mapping
 
 import pandas as pd
@@ -39,35 +41,66 @@ class EnrichmentRunner:
             (Evidence("provider_error", None, "数据源暂不可用", dimension),),
         )
 
-    def _call(self, dimension: str, context: CandidateInput) -> ProviderResult:
+    def _invoke(self, dimension: str, context: CandidateInput) -> ProviderResult:
         provider = self.providers[dimension]
-        try:
-            if dimension == "market":
-                return provider.assess(context.symbol, context.bars, context.benchmarks)
-            if dimension == "fundamental":
-                return provider.assess(context.symbol)
-            if dimension == "event_news":
-                return provider.assess(context.symbol, context.now)
-            return provider.assess(context.symbol, context.spot, context.now)
-        except Exception:
-            return self._error_result(dimension)
+        if dimension == "market":
+            return provider.assess(context.symbol, context.bars, context.benchmarks)
+        if dimension == "fundamental":
+            return provider.assess(context.symbol)
+        if dimension == "event_news":
+            return provider.assess(context.symbol, context.now)
+        return provider.assess(context.symbol, context.spot, context.now)
+
+    def _call(self, dimension: str, context: CandidateInput) -> ProviderResult:
+        for attempt in range(self.settings.provider_retries + 1):
+            outcome = Queue(maxsize=1)
+            def invoke():
+                try:
+                    outcome.put((True, self._invoke(dimension, context)))
+                except Exception:
+                    outcome.put((False, None))
+            Thread(target=invoke, daemon=True).start()
+            try:
+                ok, result = outcome.get(timeout=self.settings.provider_timeout_seconds)
+            except Empty:
+                return self._error_result(dimension)
+            if ok:
+                return result
+            if attempt == self.settings.provider_retries:
+                break
+        return self._error_result(dimension)
 
     def enrich(self, contexts: tuple[CandidateInput, ...]) -> dict[str, EnrichmentBundle]:
         values: dict[str, dict[str, ProviderResult]] = {item.symbol: {} for item in contexts}
-        with ThreadPoolExecutor(max_workers=self.settings.enrichment_workers) as executor:
-            futures = {
-                executor.submit(self._call, dimension, item): (item.symbol, dimension)
-                for item in contexts
-                for dimension in self.providers
-            }
-            done, pending = wait(futures, timeout=self.settings.enrichment_timeout_seconds)
-            for future in done:
-                symbol, dimension = futures[future]
-                values[symbol][dimension] = future.result()
-            for future in pending:
-                symbol, dimension = futures[future]
-                future.cancel()
-                values[symbol][dimension] = self._error_result(dimension)
+        tasks = Queue()
+        results = Queue()
+        for item in contexts:
+            for dimension in self.providers:
+                tasks.put((dimension, item))
+
+        def worker():
+            while True:
+                try:
+                    dimension, item = tasks.get_nowait()
+                except Empty:
+                    return
+                results.put((item.symbol, dimension, self._call(dimension, item)))
+
+        remaining = tasks.qsize()
+        workers = min(self.settings.enrichment_workers, remaining)
+        for _ in range(workers):
+            Thread(target=worker, daemon=True).start()
+        deadline = monotonic() + self.settings.enrichment_timeout_seconds
+        while remaining and monotonic() < deadline:
+            try:
+                symbol, dimension, result = results.get(timeout=max(0, min(0.05, deadline - monotonic())))
+            except Empty:
+                continue
+            values[symbol][dimension] = result
+            remaining -= 1
+        for symbol, parts in values.items():
+            for dimension in self.providers:
+                parts.setdefault(dimension, self._error_result(dimension))
         return {
             symbol: EnrichmentBundle(
                 market=parts.get("market"),

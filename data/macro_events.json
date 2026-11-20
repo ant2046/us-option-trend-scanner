@@ -1,4 +1,5 @@
 {
-  "valid_through": "2026-12-31",
+  "coverage_start": "2026-01-01",
+  "valid_through": "2026-01-01",
   "events": []
 }

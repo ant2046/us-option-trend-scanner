@@ -35,8 +35,12 @@ class AssessmentScorer:
             value = values.get(key)
             if value is None:
                 continue
+            try:
+                passed = bool(predicate(value))
+            except (TypeError, ValueError, OverflowError):
+                continue
             available += points
-            if predicate(value):
+            if passed:
                 earned += points
         if freshness:
             available += freshness
@@ -49,17 +53,31 @@ class AssessmentScorer:
         earned = 8
         earned += 4 if signal.close > signal.ma50 else 0
         earned += 4 if signal.ma20 > signal.ma50 else 0
-        earned += 4 if signal.score >= 3 else 0
+        earned += 4 if signal.higher_range else 0
         earned += 5 if "回调转强" in signal.triggers else 0
         earned += 5 if "平台突破" in signal.triggers else 0
         return DimensionScore("技术", min(30, earned), 30, DimensionStatus.OK)
 
     @staticmethod
-    def _ordered_tags(bundle: EnrichmentBundle) -> tuple[RiskTag, ...]:
+    def _ordered_tags(candidate: Candidate, bundle: EnrichmentBundle) -> tuple[RiskTag, ...]:
         raw = []
         for result in (bundle.market, bundle.fundamental, bundle.event_news, bundle.options):
             if result:
                 raw.extend(result.tags)
+        if "失效" in candidate.status:
+            raw.append(RiskTag(RiskLevel.HIGH, "premarket_invalid", "盘前信号失效", candidate.status))
+        elif "跳空" in candidate.status:
+            raw.append(RiskTag(RiskLevel.CAUTION, "premarket_gap", "盘前跳空偏高", candidate.status))
+        elif "异常" in candidate.status:
+            raw.append(RiskTag(RiskLevel.HIGH, "premarket_data_error", "盘前数据异常", candidate.status))
+        names = (("market", bundle.market, "市场环境数据暂缺"), ("fundamental", bundle.fundamental, "基本面数据暂缺"), ("event_news", bundle.event_news, "消息数据暂缺"), ("options", bundle.options, "期权数据暂缺"))
+        for code, result, title in names:
+            if result is None or result.status in {DimensionStatus.UNAVAILABLE, DimensionStatus.ERROR}:
+                raw.append(RiskTag(RiskLevel.INFO, f"{code}_data_missing", title, "该维度未计入观察分"))
+        market_values = AssessmentScorer._values(bundle.market)
+        volatility = market_values.get("volatility_percentile")
+        if isinstance(volatility, (int, float)) and volatility > 0.8:
+            raw.append(RiskTag(RiskLevel.CAUTION, "volatility_high", "波动率异常", f"历史分位 {volatility:.0%}"))
         severity = {RiskLevel.HIGH: 0, RiskLevel.CAUTION: 1, RiskLevel.INFO: 2}
         seen: set[str] = set()
         unique = []
@@ -89,7 +107,8 @@ class AssessmentScorer:
                 "earnings_days": (6, lambda value: value > 7),
                 "macro_events": (4, lambda value: len(value) == 0),
                 "negative_headlines": (3, lambda value: len(value) == 0),
-            }, freshness=2 if bundle.event_news and bundle.event_news.status in {DimensionStatus.OK, DimensionStatus.PARTIAL} else 0),
+                "news_fresh": (2, bool),
+            }),
             self._dimension("期权", bundle.options, {
                 "expiry": (3, lambda value: bool(value)),
                 "spread_ratio": (4, lambda value: value <= self.settings.option_max_spread_ratio),
@@ -103,4 +122,4 @@ class AssessmentScorer:
         applicable_max = 80 if candidate.signal.symbol in {"SPY", "QQQ"} else 100
         completeness = available / applicable_max
         normalized = round(100 * earned / available) if available and completeness >= self.settings.normalized_score_min_completeness else None
-        return CandidateAssessment(candidate, earned, available, completeness, normalized, dimensions, self._ordered_tags(bundle))
+        return CandidateAssessment(candidate, earned, available, completeness, normalized, dimensions, self._ordered_tags(candidate, bundle))

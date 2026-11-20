@@ -227,3 +227,20 @@ def test_all_enrichment_failures_still_deliver_and_are_counted(monkeypatch):
     assert result.status == RunStatus.SUCCESS
     assert result.enrichment_failure_count == 9
     assert sender.images == [b"technical-report"]
+
+
+def test_scoring_failure_for_one_candidate_does_not_block_delivery(monkeypatch):
+    class BrokenScorer:
+        def score(self, candidate, bundle):
+            raise TypeError("malformed provider value")
+
+    monkeypatch.setattr("market_scanner.main.render_png", lambda report: b"technical-fallback")
+    sender = Sender()
+    base = deps(sender=sender)
+    dependencies = Dependencies(base.calendar, base.data, base.signals, base.sender_factory, base.output, base.settings, FakeEnricher(), BrokenScorer())
+
+    result = run_scan(dependencies, now=NOW, send=True)
+
+    assert result.status == RunStatus.SUCCESS
+    assert result.enrichment_failure_count == 9
+    assert sender.images == [b"technical-fallback"]

@@ -105,7 +105,6 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
             if item.signal.symbol in bars_by_symbol
         )
         bundles = deps.enrichment.enrich(contexts)
-        assessments = tuple(deps.scorer.score(item.candidate, bundles[item.symbol]) for item in contexts)
         enrichment_failure_count = sum(
             any(
                 result is not None and result.status == DimensionStatus.ERROR
@@ -113,6 +112,13 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
             )
             for bundle in bundles.values()
         )
+        scored = []
+        for item in contexts:
+            try:
+                scored.append(deps.scorer.score(item.candidate, bundles[item.symbol]))
+            except Exception:
+                enrichment_failure_count += 1
+        assessments = tuple(scored)
 
     def benchmark_summary(symbol: str) -> str:
         trend = benchmark_trends[symbol]

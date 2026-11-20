@@ -99,3 +99,13 @@ def test_enriched_image_report_paginates_nine_cards_and_preserves_order():
     assert len(pages) >= 2
     assert all(page.startswith(b"\x89PNG") and len(page) < 2 * 1024 * 1024 for page in pages)
     assert all(Image.open(BytesIO(page)).width == 860 for page in pages)
+
+
+def test_paginated_reports_preserve_global_counts_and_failures(monkeypatch):
+    items = tuple(make_candidate(price=101 + index) for index in range(4))
+    report = ScanReport(MarketSession(date(2026, 11, 19), datetime(2026, 11, 19, 9, 30, tzinfo=NY)), "SPY合格", "QQQ合格", items, ("TSLA",))
+    captured = []
+    monkeypatch.setattr("market_scanner.image_report.render_png", lambda page, font_path=None: captured.append(page) or b"png")
+    render_png_pages(report, font_path=FONT_PATH, cards_per_page=2)
+    assert [page.total_candidate_count for page in captured] == [4, 4]
+    assert [page.failures for page in captured] == [("TSLA",), ("TSLA",)]

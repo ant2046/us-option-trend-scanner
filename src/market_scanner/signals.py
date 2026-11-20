@@ -81,4 +81,5 @@ class SignalEngine:
             score=int(score),
             triggers=tuple(triggers),
             invalidation=min(invalidations),
+            higher_range=bool(higher_range),
         )

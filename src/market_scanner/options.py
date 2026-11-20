@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from math import isfinite
 from typing import Callable
 
 import pandas as pd
@@ -40,32 +41,43 @@ class YahooOptionsProvider:
         if call is None or put is None:
             return ProviderResult("options", DimensionStatus.UNAVAILABLE, tags=(RiskTag(RiskLevel.HIGH, "option_quote_missing", "期权无有效报价", "Call/Put 数据不完整"),))
 
-        def number(row, key, default=0.0):
-            value = row.get(key, default)
-            return float(value) if pd.notna(value) else float(default)
+        def number(row, key):
+            value = row.get(key)
+            if value is None or pd.isna(value):
+                return None
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if isfinite(parsed) else None
 
         def spread(row):
             bid, ask = number(row, "bid"), number(row, "ask")
-            return (ask - bid) / ask if ask > 0 and 0 <= bid <= ask else 1.0
+            if bid is None or ask is None or bid <= 0 or ask <= 0 or bid > ask:
+                return None
+            return (ask - bid) / ((ask + bid) / 2)
 
-        spread_ratio = max(spread(call), spread(put))
-        volume = int(min(number(call, "volume"), number(put, "volume")))
-        open_interest = int(min(number(call, "openInterest"), number(put, "openInterest")))
-        ivs = [number(call, "impliedVolatility", float("nan")), number(put, "impliedVolatility", float("nan"))]
-        valid_ivs = [value for value in ivs if pd.notna(value) and 0 < value <= 5]
-        iv = sum(valid_ivs) / len(valid_ivs) if len(valid_ivs) == 2 else None
+        spreads = [spread(call), spread(put)]
+        if any(value is None for value in spreads):
+            return ProviderResult("options", DimensionStatus.UNAVAILABLE, tags=(RiskTag(RiskLevel.HIGH, "option_quote_missing", "期权无有效报价", "Call/Put 买卖报价缺失或交叉"),))
+        spread_ratio = max(spreads)
+        raw_volumes = [number(call, "volume"), number(put, "volume")]
+        raw_oi = [number(call, "openInterest"), number(put, "openInterest")]
+        volume = int(min(raw_volumes)) if all(value is not None for value in raw_volumes) else None
+        open_interest = int(min(raw_oi)) if all(value is not None for value in raw_oi) else None
+        ivs = [number(call, "impliedVolatility"), number(put, "impliedVolatility")]
+        iv = sum(ivs) / 2 if all(value is not None and 0 < value <= 5 for value in ivs) else None
         evidence = (
             Evidence("expiry", expiry, expiry, "yahoo-options", now),
             Evidence("spread_ratio", spread_ratio, f"价差 {spread_ratio:.1%}", "yahoo-options", now),
-            Evidence("option_volume", volume, f"成交量 {volume}", "yahoo-options", now),
-            Evidence("open_interest", open_interest, f"未平仓 {open_interest}", "yahoo-options", now),
-            Evidence("implied_volatility", iv, f"IV {iv:.1%}" if iv is not None else "IV异常", "yahoo-options", now),
+            Evidence("option_volume", volume, f"成交量 {volume}" if volume is not None else "成交量暂缺", "yahoo-options", now),
+            Evidence("open_interest", open_interest, f"未平仓 {open_interest}" if open_interest is not None else "未平仓暂缺", "yahoo-options", now),
+            Evidence("implied_volatility", iv, f"IV {iv:.1%}" if iv is not None else "IV暂缺", "yahoo-options", now),
         )
         tags: list[RiskTag] = []
-        if spread_ratio > self.settings.option_max_spread_ratio:
+        if spread_ratio > 0.15:
             tags.append(RiskTag(RiskLevel.CAUTION, "option_spread_wide", "期权价差偏大", f"较差一侧 {spread_ratio:.1%}"))
-        if volume < self.settings.option_min_volume or open_interest < self.settings.option_min_open_interest:
+        if (volume is not None and volume < self.settings.option_min_volume) or (open_interest is not None and open_interest < self.settings.option_min_open_interest):
             tags.append(RiskTag(RiskLevel.CAUTION, "option_liquidity_low", "期权流动性偏低", f"量 {volume} / OI {open_interest}"))
-        if iv is None:
-            tags.append(RiskTag(RiskLevel.CAUTION, "option_iv_abnormal", "波动率数据异常", "Call/Put IV 不完整"))
-        return ProviderResult("options", DimensionStatus.OK, evidence, tuple(tags))
+        status = DimensionStatus.OK if volume is not None and open_interest is not None and iv is not None else DimensionStatus.PARTIAL
+        return ProviderResult("options", status, evidence, tuple(tags))

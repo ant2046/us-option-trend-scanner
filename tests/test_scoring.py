@@ -23,10 +23,10 @@ def ev(key, value):
     return Evidence(key, value, str(value), "test", NOW)
 
 
-def candidate(symbol="AAPL"):
-    signal = TrendSignal(symbol, date(2026, 11, 18), 100, 95, 90, 3, ("平台突破",), 92)
+def candidate(symbol="AAPL", *, status="允许关注", higher_range=False):
+    signal = TrendSignal(symbol, date(2026, 11, 18), 100, 95, 90, 3, ("平台突破",), 92, higher_range)
     quote = PremarketQuote(symbol, QuoteStatus.OK, 101, NOW)
-    return Candidate(signal, quote, 0.01, "允许关注")
+    return Candidate(signal, quote, 0.01, status)
 
 
 def test_scorer_calculates_known_points_and_normalizes_only_above_completeness_threshold():
@@ -36,7 +36,7 @@ def test_scorer_calculates_known_points_and_normalizes_only_above_completeness_t
     ))
     fundamental = ProviderResult("fundamental", DimensionStatus.PARTIAL, (ev("revenue_growth", 0.1),))
     event = ProviderResult("event_news", DimensionStatus.OK, (
-        ev("earnings_days", 20), ev("macro_events", ()), ev("negative_headlines", ()),
+        ev("earnings_days", 20), ev("macro_events", ()), ev("negative_headlines", ()), ev("news_fresh", True),
     ))
     options = ProviderResult("options", DimensionStatus.OK, (
         ev("expiry", "2026-12-18"), ev("spread_ratio", 0.05), ev("option_volume", 200),
@@ -81,4 +81,17 @@ def test_tags_are_deduplicated_and_sorted_high_before_caution_before_info():
 
     result = AssessmentScorer().score(candidate(), bundle)
 
-    assert [tag.code for tag in result.tags] == ["earnings", "spread", "missing"]
+    assert [tag.code for tag in result.tags[:3]] == ["earnings", "spread", "missing"]
+    assert {"market_data_missing", "fundamental_data_missing", "options_data_missing"} <= {tag.code for tag in result.tags}
+
+
+def test_technical_higher_range_uses_explicit_signal_not_legacy_score():
+    without = AssessmentScorer().score(candidate(higher_range=False), EnrichmentBundle())
+    with_range = AssessmentScorer().score(candidate(higher_range=True), EnrichmentBundle())
+    assert with_range.earned_points - without.earned_points == 4
+
+
+def test_scorer_adds_candidate_and_missing_dimension_risk_tags():
+    result = AssessmentScorer().score(candidate(status="信号失效"), EnrichmentBundle(market=ProviderResult("market", DimensionStatus.ERROR)))
+    codes = {tag.code for tag in result.tags}
+    assert "premarket_invalid" in codes and "market_data_missing" in codes

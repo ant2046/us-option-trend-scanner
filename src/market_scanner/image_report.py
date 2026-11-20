@@ -89,7 +89,7 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
         for assessment in report.assessments
         if assessment.candidate is not None
     }
-    card_height = 280 if assessment_by_symbol else 200
+    card_height = 315 if assessment_by_symbol else 200
     card_step = card_height + 20
     content_height = max(300, len(candidates) * card_step)
     height = 360 + content_height + (90 if report.failures else 0) + 110
@@ -123,7 +123,7 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
     _text(draw, (680, 45), market_label, regular_20, market_color)
 
     draw.rounded_rectangle((36, 260, 824, 335), radius=24, fill="#ffffff")
-    summaries = (("SPY", report.spy_summary), ("QQQ", report.qqq_summary), ("入选", str(len(candidates))))
+    summaries = (("SPY", report.spy_summary), ("QQQ", report.qqq_summary), ("入选", str(report.total_candidate_count if report.total_candidate_count is not None else len(candidates))))
     for index, (label, value) in enumerate(summaries):
         left = 36 + index * 263
         if index:
@@ -164,12 +164,15 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
                 normalized = f" · 观察分 {assessment.normalized_score}" if assessment.normalized_score is not None else " · 观察分 --"
                 _text(draw, (76, y + 185), f"维度 {total}{normalized} · 完整度 {assessment.completeness:.0%}", regular_20, "#17345b")
                 dimension_text = " · ".join(
-                    f"{score.name}{score.earned_points}/{score.available_points}" if score.available_points else f"{score.name}--"
+                    f"{score.name}{score.earned_points}/{score.available_points}" if score.available_points else f"{score.name}{'不适用' if score.status.value == 'not_applicable' else '--'}"
                     for score in assessment.dimensions
                 )
                 _text(draw, (76, y + 220), dimension_text[:52], regular_20, "#687690")
-                tags = " / ".join(tag.title for tag in assessment.tags[:3]) or "无突出风险标签"
-                _text(draw, (76, y + 250), tags[:36], regular_20, "#bd7000")
+                tags = " / ".join(f"{tag.title}:{tag.detail}" for tag in assessment.tags[:3]) or "无突出风险标签"
+                tag_color = "#c64242" if assessment.tags and assessment.tags[0].level.value == "high" else "#bd7000" if assessment.tags and assessment.tags[0].level.value == "caution" else "#687690"
+                _text(draw, (76, y + 250), tags[:36], regular_20, tag_color)
+                evidence = next((entry.display for score in assessment.dimensions for entry in score.evidence if entry.value is not None), "暂无可用补充依据")
+                _text(draw, (76, y + 282), f"依据：{evidence}"[:44], regular_20, "#687690")
             y += card_step
 
     if report.failures:
@@ -177,7 +180,7 @@ def render_png(report: ScanReport, *, font_path: str | None = None) -> bytes:
         _text(draw, (60, y + 20), f"数据异常：{', '.join(report.failures)}", regular_20, "#b23b3b")
         y += 86
 
-    _text(draw, (38, height - 74), "顺日线趋势 · 不预测涨跌", regular_20, "#687690")
+    _text(draw, (38, height - 74), "观察分基于可用数据 · 不代表胜率", regular_20, "#687690")
     _text(draw, (510, height - 74), "仅供策略筛选，不构成投资建议", regular_20, "#687690")
 
     output = BytesIO()
@@ -206,8 +209,9 @@ def render_png_pages(report: ScanReport, *, font_path: str | None = None, cards_
             report.spy_summary,
             report.qqq_summary,
             candidates,
-            report.failures if start == 0 else (),
+            report.failures,
             assessments,
+            report.total_candidate_count if report.total_candidate_count is not None else len(report.candidates),
         )
         payload = render_png(page, font_path=font_path)
         if len(payload) > 2 * 1024 * 1024:

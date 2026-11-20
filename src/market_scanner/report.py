@@ -25,6 +25,7 @@ class ScanReport:
     candidates: tuple[Candidate, ...]
     failures: tuple[str, ...] = ()
     assessments: tuple[CandidateAssessment, ...] = ()
+    total_candidate_count: int | None = None
 
 
 def _candidate_lines(item: Candidate) -> list[str]:
@@ -45,14 +46,16 @@ def _candidate_lines(item: Candidate) -> list[str]:
 def _assessment_lines(assessment: CandidateAssessment) -> list[str]:
     normalized = f"｜观察分 {assessment.normalized_score}/100" if assessment.normalized_score is not None else "｜观察分 --"
     dimensions = " · ".join(
-        f"{item.name} {item.earned_points}/{item.available_points}" if item.available_points else f"{item.name} --"
+        f"{item.name} {item.earned_points}/{item.available_points}" if item.available_points else f"{item.name} {'不适用' if item.status.value == 'not_applicable' else '--'}"
         for item in assessment.dimensions
     )
-    tags = "；".join(tag.title for tag in assessment.tags[:3]) or "无突出风险标签"
+    tags = "；".join(f"{tag.level.value}:{tag.title}（{tag.detail}）" for tag in assessment.tags[:3]) or "无突出风险标签"
+    evidence = next((item.display for dimension in assessment.dimensions for item in dimension.evidence if item.value is not None), "暂无可用补充依据")
     return [
         f"- 维度得分 `{assessment.earned_points}/{assessment.available_points}`{normalized}｜数据完整度 {assessment.completeness:.0%}",
         f"- {dimensions}",
         f"- 风险：{tags}",
+        f"- 依据：{evidence}",
     ]
 
 

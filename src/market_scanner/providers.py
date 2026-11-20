@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import isfinite
 from typing import Callable, Mapping
 
 import pandas as pd
@@ -16,6 +17,8 @@ def _evidence(key, value, display, source="yahoo") -> Evidence:
 class YahooMarketContextProvider:
     @staticmethod
     def _trend(frame: pd.DataFrame) -> bool | None:
+        if frame is None or "Close" not in frame:
+            return None
         closes = frame["Close"].dropna()
         if len(closes) < 25:
             return None
@@ -24,6 +27,8 @@ class YahooMarketContextProvider:
 
     @staticmethod
     def _return(frame: pd.DataFrame) -> float | None:
+        if frame is None or "Close" not in frame:
+            return None
         closes = frame["Close"].dropna()
         if len(closes) < 21:
             return None
@@ -55,12 +60,32 @@ class YahooFundamentalsProvider:
         self._now = now
 
     @staticmethod
-    def _row(frame: pd.DataFrame, name: str) -> list[float]:
+    def _series(frame: pd.DataFrame, name: str) -> pd.Series:
         if frame is None or frame.empty or name not in frame.index:
-            return []
-        values = frame.loc[name].dropna()
-        values = values.reindex(sorted(values.index, reverse=True))
-        return [float(value) for value in values.iloc[:2]]
+            return pd.Series(dtype=float)
+        values = pd.to_numeric(frame.loc[name], errors="coerce").dropna()
+        return values.reindex(sorted(values.index, reverse=True))
+
+    @staticmethod
+    def _finite(value):
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if isfinite(result) else None
+
+    @classmethod
+    def _yoy(cls, values: pd.Series):
+        if values.empty:
+            return None
+        latest_date = pd.Timestamp(values.index[0])
+        targets = [index for index in values.index[1:] if 350 <= (latest_date - pd.Timestamp(index)).days <= 380]
+        if not targets:
+            return None
+        current, prior = cls._finite(values.iloc[0]), cls._finite(values.loc[targets[0]])
+        if current is None or prior is None or prior <= 0:
+            return None
+        return current / prior - 1
 
     def assess(self, symbol: str) -> ProviderResult:
         if symbol in {"SPY", "QQQ"}:
@@ -68,22 +93,32 @@ class YahooFundamentalsProvider:
         ticker = self._ticker_factory(symbol)
         financials = getattr(ticker, "quarterly_financials", pd.DataFrame())
         cashflow = getattr(ticker, "quarterly_cashflow", pd.DataFrame())
+        annual_financials = getattr(ticker, "financials", pd.DataFrame())
+        annual_cashflow = getattr(ticker, "cashflow", pd.DataFrame())
         info = getattr(ticker, "info", {}) or {}
-        revenue = self._row(financials, "Total Revenue")
-        earnings = self._row(financials, "Net Income")
-        fcf = self._row(cashflow, "Free Cash Flow")
-
-        def growth(values):
-            return values[0] / values[1] - 1 if len(values) >= 2 and values[1] else None
+        revenue = self._series(financials, "Total Revenue")
+        earnings = self._series(financials, "Net Income")
+        fcf = self._series(cashflow, "Free Cash Flow")
+        annual_revenue = self._series(annual_financials, "Total Revenue")
+        annual_earnings = self._series(annual_financials, "Net Income")
+        annual_fcf = self._series(annual_cashflow, "Free Cash Flow")
+        revenue_growth = self._yoy(revenue)
+        earnings_growth = self._yoy(earnings)
+        if revenue_growth is None:
+            revenue_growth = self._yoy(annual_revenue)
+        if earnings_growth is None:
+            earnings_growth = self._yoy(annual_earnings)
+        if fcf.empty:
+            fcf = annual_fcf
 
         observed = self._now()
         evidence = (
-            Evidence("revenue_growth", growth(revenue), "营收同比", "yahoo-quarterly", observed),
-            Evidence("earnings_growth", growth(earnings), "利润同比", "yahoo-quarterly", observed),
-            Evidence("free_cash_flow", fcf[0] if fcf else None, "自由现金流", "yahoo-quarterly", observed),
-            Evidence("profit_margin", info.get("profitMargins"), "净利率", "yahoo", observed),
-            Evidence("debt_to_equity", info.get("debtToEquity"), "负债权益比", "yahoo", observed),
-            Evidence("trailing_pe", info.get("trailingPE"), "市盈率", "yahoo", observed),
+            Evidence("revenue_growth", revenue_growth, "营收同比", "yahoo", observed),
+            Evidence("earnings_growth", earnings_growth, "利润同比", "yahoo", observed),
+            Evidence("free_cash_flow", self._finite(fcf.iloc[0]) if not fcf.empty else None, "自由现金流", "yahoo-quarterly", observed),
+            Evidence("profit_margin", self._finite(info.get("profitMargins")), "净利率", "yahoo", observed),
+            Evidence("debt_to_equity", self._finite(info.get("debtToEquity")), "负债权益比", "yahoo", observed),
+            Evidence("trailing_pe", self._finite(info.get("trailingPE")), "市盈率", "yahoo", observed),
         )
         known = sum(item.value is not None for item in evidence[:5])
         status = DimensionStatus.OK if known == 5 else DimensionStatus.PARTIAL if known else DimensionStatus.UNAVAILABLE

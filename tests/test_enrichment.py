@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from time import monotonic, sleep
 
 import pandas as pd
 
@@ -45,3 +46,32 @@ def test_enrichment_runner_only_returns_requested_candidates():
     runner = EnrichmentRunner(Provider("market"), Provider("fundamental"), Provider("event_news"), Provider("options"), Settings())
 
     assert tuple(runner.enrich((context("NVDA"),))) == ("NVDA",)
+
+
+def test_enrichment_deadline_returns_without_waiting_for_blocked_provider():
+    class SlowProvider(Provider):
+        def assess(self, *args):
+            sleep(0.25)
+            return super().assess(*args)
+
+    runner = EnrichmentRunner(SlowProvider("market"), SlowProvider("fundamental"), SlowProvider("event_news"), SlowProvider("options"), Settings(enrichment_workers=4, enrichment_timeout_seconds=0.02, provider_timeout_seconds=0.01))
+    started = monotonic()
+    result = runner.enrich((context(),))["AAPL"]
+    assert monotonic() - started < 0.12
+    assert result.market.status == DimensionStatus.ERROR
+
+
+def test_enrichment_retries_one_transient_provider_error():
+    class FlakyProvider(Provider):
+        def __init__(self, dimension):
+            super().__init__(dimension)
+            self.calls = 0
+        def assess(self, *args):
+            self.calls += 1
+            if self.calls == 1:
+                raise ConnectionError("temporary")
+            return super().assess(*args)
+    flaky = FlakyProvider("market")
+    runner = EnrichmentRunner(flaky, Provider("fundamental"), Provider("event_news"), Provider("options"), Settings(provider_retries=1))
+    assert runner.enrich((context(),))["AAPL"].market.status == DimensionStatus.OK
+    assert flaky.calls == 2
