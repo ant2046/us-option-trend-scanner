@@ -59,3 +59,22 @@ def test_settings_repr_redacts_webhook(monkeypatch):
 
     assert secret not in repr(settings)
     assert "super-secret" not in repr(settings)
+
+
+def test_massive_configuration_is_optional_and_redacted(monkeypatch):
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.delenv("MASSIVE_BASE_URL", raising=False)
+
+    missing = Settings.from_env(require_webhook=False)
+
+    assert missing.massive_api_key is None
+    assert missing.massive_base_url == "https://api.massive.com"
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-secret")
+    monkeypatch.setenv("MASSIVE_BASE_URL", "https://example.invalid/")
+
+    configured = Settings.from_env(require_webhook=False)
+
+    assert configured.massive_api_key == "massive-secret"
+    assert configured.massive_base_url == "https://example.invalid"
+    assert "massive-secret" not in repr(configured)

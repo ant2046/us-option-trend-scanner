@@ -44,11 +44,19 @@ class Settings:
     enrichment_workers: int = 4
     normalized_score_min_completeness: float = 0.70
     wecom_webhook_url: str | None = field(default=None, repr=False)
+    massive_api_key: str | None = field(default=None, repr=False)
+    massive_base_url: str = "https://api.massive.com"
 
     @classmethod
     def from_env(cls, *, require_webhook: bool) -> "Settings":
         webhook = os.getenv("WECOM_WEBHOOK_URL") or None
+        massive_api_key = os.getenv("MASSIVE_API_KEY") or None
+        massive_base_url = (os.getenv("MASSIVE_BASE_URL") or "https://api.massive.com").rstrip("/")
         if require_webhook and not webhook:
             raise ConfigError("WECOM_WEBHOOK_URL is required in send mode")
-        return cls(wecom_webhook_url=webhook)
+        return cls(
+            wecom_webhook_url=webhook,
+            massive_api_key=massive_api_key,
+            massive_base_url=massive_base_url,
+        )
 
