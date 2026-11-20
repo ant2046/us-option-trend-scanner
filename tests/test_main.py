@@ -3,7 +3,13 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from market_scanner.main import Dependencies, RunStatus, run_scan
+from market_scanner.config import Settings
+from market_scanner.data import FallbackMarketData, YahooMarketData
+from market_scanner.event_news import FallbackEventNewsProvider, YahooEventNewsProvider
+from market_scanner.main import Dependencies, RunStatus, _dependencies, run_scan
+from market_scanner.massive_data import MassiveMarketData
+from market_scanner.options import YahooOptionsProvider
+from market_scanner.providers import YahooFundamentalsProvider
 from market_scanner.models import DimensionStatus, EnrichmentBundle, MarketSession, PremarketQuote, ProviderResult, QuoteStatus, TrendSignal
 from market_scanner.scoring import AssessmentScorer
 
@@ -244,3 +250,24 @@ def test_scoring_failure_for_one_candidate_does_not_block_delivery(monkeypatch):
     assert result.status == RunStatus.SUCCESS
     assert result.enrichment_failure_count == 9
     assert sender.images == [b"technical-fallback"]
+
+
+def test_dependency_assembly_uses_massive_primary_and_yahoo_fallback_when_configured():
+    dependencies = _dependencies(Settings(massive_api_key="configured-secret"))
+
+    assert isinstance(dependencies.data, FallbackMarketData)
+    assert isinstance(dependencies.data._primary, MassiveMarketData)
+    assert isinstance(dependencies.data._fallback, YahooMarketData)
+    assert isinstance(dependencies.enrichment.providers["event_news"], FallbackEventNewsProvider)
+    assert isinstance(dependencies.enrichment.providers["fundamental"], YahooFundamentalsProvider)
+    assert isinstance(dependencies.enrichment.providers["options"], YahooOptionsProvider)
+    assert "configured-secret" not in repr(dependencies.settings)
+
+
+def test_dependency_assembly_remains_yahoo_only_without_massive_key():
+    dependencies = _dependencies(Settings())
+
+    assert isinstance(dependencies.data, YahooMarketData)
+    assert isinstance(dependencies.enrichment.providers["event_news"], YahooEventNewsProvider)
+    assert isinstance(dependencies.enrichment.providers["fundamental"], YahooFundamentalsProvider)
+    assert isinstance(dependencies.enrichment.providers["options"], YahooOptionsProvider)

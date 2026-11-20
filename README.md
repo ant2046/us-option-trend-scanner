@@ -4,7 +4,7 @@
 
 `SPY QQQ AAPL MSFT GOOGL AMZN NVDA META TSLA`
 
-程序使用上一完整交易日的日线判断趋势和“回调转强／平台突破”信号，再结合盘前价格标记“允许关注、跳空偏高不追、信号失效或数据异常”。技术规则仍是唯一入选条件；入选后再补充市场环境、基本面、事件消息和期权可交易性，生成观察分与风险标签，最后通过企业微信群机器人推送适合手机阅读的图片。它不会连接券商或自动下单，也不推荐具体期权合约。
+程序使用上一完整交易日的日线判断趋势和“回调转强／平台突破”信号，再结合盘前价格标记“允许关注、跳空偏高不追、信号失效或数据异常”。行情与新闻优先读取 Massive，失败或数据陈旧时自动降级到 Yahoo；当前套餐不支持的基本面和期权仍由 Yahoo 提供。技术规则仍是唯一入选条件；入选后再补充市场环境、基本面、事件消息和期权可交易性，生成观察分与风险标签，最后通过企业微信群机器人推送适合手机阅读的图片。它不会连接券商或自动下单，也不推荐具体期权合约。
 
 ## 筛选规则
 
@@ -44,6 +44,13 @@ python -m market_scanner.main --dry-run
 
 `--dry-run` 是默认模式，只打印报告，不需要企业微信地址。
 
+启用 Massive 主数据源需要环境变量 `MASSIVE_API_KEY`；未配置时程序自动使用 Yahoo，不影响本地开发：
+
+```powershell
+$env:MASSIVE_API_KEY="在 Massive 后台生成的密钥"
+python -m market_scanner.main --dry-run
+```
+
 本机真实发送前，需要提供企业微信地址：
 
 ```bash
@@ -59,18 +66,18 @@ python -m market_scanner.main --send
 1. 在目标企业微信群中添加“群机器人”。
 2. 复制机器人 Webhook 地址，不要提交到仓库。
 3. 打开 GitHub 私有仓库的 **Settings → Secrets and variables → Actions**。
-4. 新建 Repository secret：名称为 `WECOM_WEBHOOK_URL`，值为完整 Webhook 地址。
+4. 新建 Repository secret：`WECOM_WEBHOOK_URL` 保存完整 Webhook 地址，`MASSIVE_API_KEY` 保存 Massive 密钥。
 5. 打开 **Actions → Premarket trend scan → Run workflow**：
    - `send=false`：只执行 dry-run；
    - `send=true`：进行一次真实测试推送。
 
-定时任务按 `America/New_York` 时区在工作日 08:30 触发；程序会再用 NYSE 日历判断是否开市，周末和休市日不发送。GitHub Actions 会安装 Noto Sans CJK 字体，并从 Repository Secret 读取 Webhook；Webhook 不会写入代码或日志。
+定时任务按 `America/New_York` 时区在工作日 08:30 触发；程序会再用 NYSE 日历判断是否开市，周末和休市日不发送。GitHub Actions 会安装 Noto Sans CJK 字体，并从 Repository Secret 读取 Webhook 与 Massive 密钥；敏感值不会写入代码或日志。
 
 ## 排障
 
-- `DATA_FAILED`：检查 Yahoo Finance 是否临时限流或缺少行情；
+- `DATA_FAILED`：检查 Massive 与 Yahoo 是否临时限流、权限不足或缺少行情；
 - `DELIVERY_FAILED`：检查 Secret 名称、Webhook 是否过期、机器人是否仍在群中；
 - GitHub Actions 定时任务可能有排队延迟，因此本工具是盘前研究提醒，不是自动交易基础设施；
-- Yahoo Finance 等免费数据可能延迟、缺失、被修订或改变字段口径，新闻判断只使用保守关键词，期权部分展示当前 IV 而不伪造 IV Rank。
+- Massive 当前套餐返回延迟行情，期权快照无权限；程序会校验时间戳并按维度降级到 Yahoo。外部数据仍可能延迟、缺失、被修订或改变字段口径，新闻判断只使用保守关键词，期权部分展示当前 IV 而不伪造 IV Rank。
 
 > 本项目仅供个人研究，不构成投资建议。观察分用于整理已获得的信息，不代表胜率或涨跌预测；请在交易前自行核对行情、事件和合约流动性。

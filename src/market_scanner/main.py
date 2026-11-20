@@ -9,10 +9,12 @@ from zoneinfo import ZoneInfo
 
 from .calendar import MarketSessionService
 from .config import ConfigError, Settings, SYMBOLS
-from .data import YahooMarketData
+from .data import FallbackMarketData, YahooMarketData
 from .enrichment import CandidateInput, EnrichmentRunner
-from .event_news import YahooEventNewsProvider
+from .event_news import FallbackEventNewsProvider, MacroCalendar, MassiveEventNewsProvider, YahooEventNewsProvider
 from .image_report import render_png, render_png_pages
+from .massive import MassiveClient
+from .massive_data import MassiveMarketData
 from .models import DimensionStatus, QuoteStatus
 from .options import YahooOptionsProvider
 from .premarket import evaluate_premarket, rank_candidates
@@ -152,16 +154,43 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
 
 
 def _dependencies(settings: Settings) -> Dependencies:
+    yahoo_data = YahooMarketData(stale_minutes=settings.quote_stale_minutes)
+    macro_calendar = MacroCalendar()
+    yahoo_event_news = YahooEventNewsProvider(macro_calendar=macro_calendar, settings=settings)
+    data = yahoo_data
+    event_news = yahoo_event_news
+    if settings.massive_api_key:
+        massive_client = MassiveClient(
+            settings.massive_api_key,
+            base_url=settings.massive_base_url,
+            timeout_seconds=settings.provider_timeout_seconds,
+            retries=settings.provider_retries,
+        )
+        data = FallbackMarketData(
+            MassiveMarketData(
+                massive_client,
+                stale_minutes=settings.quote_stale_minutes,
+            ),
+            yahoo_data,
+        )
+        event_news = FallbackEventNewsProvider(
+            MassiveEventNewsProvider(
+                massive_client,
+                macro_calendar=macro_calendar,
+                settings=settings,
+            ),
+            yahoo_event_news,
+        )
     enrichment = EnrichmentRunner(
         YahooMarketContextProvider(),
         YahooFundamentalsProvider(),
-        YahooEventNewsProvider(),
+        event_news,
         YahooOptionsProvider(settings=settings),
         settings,
     )
     return Dependencies(
         calendar=MarketSessionService(),
-        data=YahooMarketData(stale_minutes=settings.quote_stale_minutes),
+        data=data,
         signals=SignalEngine(settings),
         sender_factory=lambda: WeComClient(settings.wecom_webhook_url or ""),
         settings=settings,

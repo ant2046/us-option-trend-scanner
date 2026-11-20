@@ -36,6 +36,7 @@ jobs:
         if: github.event_name == 'schedule' || inputs.send == true
         env:
           WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: python -m market_scanner.main --send
       - name: Manual dry run
         if: github.event_name == 'workflow_dispatch' && inputs.send != true
