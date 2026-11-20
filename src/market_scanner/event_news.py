@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -121,3 +122,95 @@ class YahooEventNewsProvider:
             tags.append(RiskTag(RiskLevel.CAUTION, "negative_news", "近期负面标题", negative[0]))
         status = DimensionStatus.OK if macro.status == DimensionStatus.OK and earnings is not None and recent_identified else DimensionStatus.PARTIAL
         return ProviderResult("event_news", status, tuple(evidence), tuple(tags))
+
+
+class MassiveEventNewsProvider:
+    def __init__(
+        self,
+        client,
+        *,
+        ticker_factory: Callable[[str], object] = yf.Ticker,
+        macro_calendar: MacroCalendar | None = None,
+        settings: Settings | None = None,
+    ):
+        self.client = client
+        self.ticker_factory = ticker_factory
+        self.macro_calendar = macro_calendar or MacroCalendar()
+        self.settings = settings or Settings()
+
+    def assess(self, symbol: str, now: datetime) -> ProviderResult:
+        ticker = self.ticker_factory(symbol)
+        macro = self.macro_calendar.events_for(now)
+        evidence = list(macro.evidence)
+        tags = list(macro.tags)
+
+        earnings = YahooEventNewsProvider._earnings_date(getattr(ticker, "calendar", {}))
+        if earnings is not None:
+            if earnings.tzinfo is None:
+                earnings = earnings.replace(tzinfo=now.tzinfo)
+            days = (earnings.date() - now.date()).days
+            days_value = days if days >= 0 else None
+            evidence.append(Evidence("earnings_days", days_value, f"距财报 {days} 天" if days_value is not None else "未来财报日期暂缺", "yahoo", now))
+            if 0 <= days <= self.settings.earnings_warning_days:
+                tags.append(RiskTag(RiskLevel.HIGH, "earnings_soon", "3天内财报", f"预计 {earnings.date()}"))
+        else:
+            evidence.append(Evidence("earnings_days", None, "财报日期暂缺", "yahoo", now))
+
+        items = self.client.get(
+            "/v2/reference/news",
+            {"ticker": symbol, "limit": 100, "order": "desc", "sort": "published_utc"},
+            paginate=True,
+        )
+        seen: set[str] = set()
+        negative: list[str] = []
+        recent_identified = 0
+        for item in items:
+            title = str(item.get("title") or "").strip()
+            publisher = item.get("publisher") or {}
+            publisher_name = str(publisher.get("name") or "").strip() if isinstance(publisher, dict) else ""
+            raw_date = item.get("published_utc")
+            try:
+                published = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+                published = published if published.tzinfo else published.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            age = now.astimezone(timezone.utc) - published.astimezone(timezone.utc)
+            folded = title.casefold()
+            if not title or not publisher_name or not (timedelta(0) <= age <= timedelta(hours=24)) or folded in seen:
+                continue
+            seen.add(folded)
+            recent_identified += 1
+            if any(keyword in folded for keyword in NEGATIVE_KEYWORDS):
+                negative.append(title)
+        evidence.append(Evidence("negative_headlines", tuple(negative), "；".join(negative[:2]) if negative else "未发现规则命中的负面标题", "massive-news", now))
+        evidence.append(Evidence("news_fresh", recent_identified > 0, "新闻来源与时间可识别" if recent_identified else "近期新闻数据暂缺", "massive-news", now))
+        if negative:
+            tags.append(RiskTag(RiskLevel.CAUTION, "negative_news", "近期负面标题", negative[0]))
+        status = DimensionStatus.OK if macro.status == DimensionStatus.OK and earnings is not None and recent_identified else DimensionStatus.PARTIAL
+        return ProviderResult("event_news", status, tuple(evidence), tuple(tags))
+
+
+class FallbackEventNewsProvider:
+    def __init__(self, primary, fallback):
+        self.primary = primary
+        self.fallback = fallback
+
+    @staticmethod
+    def _has_fresh_news(result: ProviderResult) -> bool:
+        return any(item.key == "news_fresh" and item.value is True for item in result.evidence)
+
+    def assess(self, symbol: str, now: datetime) -> ProviderResult:
+        try:
+            primary = self.primary.assess(symbol, now)
+            if self._has_fresh_news(primary):
+                return primary
+        except Exception:
+            pass
+        fallback = self.fallback.assess(symbol, now)
+        evidence = tuple(
+            replace(item, source="yahoo_fallback")
+            if item.key in {"negative_headlines", "news_fresh"}
+            else item
+            for item in fallback.evidence
+        )
+        return replace(fallback, evidence=evidence)
