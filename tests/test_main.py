@@ -4,7 +4,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from market_scanner.main import Dependencies, RunStatus, run_scan
-from market_scanner.models import MarketSession, PremarketQuote, QuoteStatus, TrendSignal
+from market_scanner.models import DimensionStatus, EnrichmentBundle, MarketSession, PremarketQuote, ProviderResult, QuoteStatus, TrendSignal
+from market_scanner.scoring import AssessmentScorer
 
 
 NY = ZoneInfo("America/New_York")
@@ -170,3 +171,59 @@ def test_all_daily_failures_report_market_data_unavailable(monkeypatch):
     assert run_scan(deps(data), now=NOW, send=True).status == RunStatus.DATA_FAILED
     assert captured[0].spy_summary == "SPY 数据异常"
     assert captured[0].qqq_summary == "QQQ 数据异常"
+
+
+class FakeEnricher:
+    def __init__(self, *, failed=False):
+        self.contexts = ()
+        self.failed = failed
+
+    def enrich(self, contexts):
+        self.contexts = contexts
+        status = DimensionStatus.ERROR if self.failed else DimensionStatus.UNAVAILABLE
+        return {
+            item.symbol: EnrichmentBundle(
+                market=ProviderResult("market", status),
+                fundamental=ProviderResult("fundamental", status),
+                event_news=ProviderResult("event_news", status),
+                options=ProviderResult("options", status),
+            )
+            for item in contexts
+        }
+
+
+def test_enrichment_only_receives_candidates_and_preserves_original_order(monkeypatch):
+    captured = []
+    enricher = FakeEnricher()
+    monkeypatch.setattr("market_scanner.main.render_png_pages", lambda report: captured.append(report) or (b"page-1", b"page-2"))
+    sender = Sender()
+    dependencies = deps(sender=sender)
+    dependencies = Dependencies(
+        dependencies.calendar, dependencies.data, dependencies.signals, dependencies.sender_factory,
+        dependencies.output, dependencies.settings, enricher, AssessmentScorer(),
+    )
+
+    result = run_scan(dependencies, now=NOW, send=True)
+
+    expected = ("AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "QQQ", "SPY", "TSLA")
+    assert tuple(item.symbol for item in enricher.contexts) == expected
+    assert tuple(item.candidate.signal.symbol for item in captured[0].assessments) == expected
+    assert sender.images == [b"page-1", b"page-2"]
+    assert result.enrichment_failure_count == 0
+
+
+def test_all_enrichment_failures_still_deliver_and_are_counted(monkeypatch):
+    enricher = FakeEnricher(failed=True)
+    monkeypatch.setattr("market_scanner.main.render_png_pages", lambda report: (b"technical-report",))
+    sender = Sender()
+    base = deps(sender=sender)
+    dependencies = Dependencies(
+        base.calendar, base.data, base.signals, base.sender_factory, base.output, base.settings,
+        enricher, AssessmentScorer(),
+    )
+
+    result = run_scan(dependencies, now=NOW, send=True)
+
+    assert result.status == RunStatus.SUCCESS
+    assert result.enrichment_failure_count == 9
+    assert sender.images == [b"technical-report"]

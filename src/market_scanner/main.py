@@ -10,9 +10,15 @@ from zoneinfo import ZoneInfo
 from .calendar import MarketSessionService
 from .config import ConfigError, Settings, SYMBOLS
 from .data import YahooMarketData
-from .image_report import render_png
+from .enrichment import CandidateInput, EnrichmentRunner
+from .event_news import YahooEventNewsProvider
+from .image_report import render_png, render_png_pages
+from .models import DimensionStatus, QuoteStatus
+from .options import YahooOptionsProvider
 from .premarket import evaluate_premarket, rank_candidates
+from .providers import YahooFundamentalsProvider, YahooMarketContextProvider
 from .report import ScanReport, WeComClient, render_markdown
+from .scoring import AssessmentScorer
 from .signals import SignalEngine
 
 
@@ -31,6 +37,7 @@ class RunResult:
     status: RunStatus
     candidate_count: int = 0
     failure_count: int = 0
+    enrichment_failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,8 @@ class Dependencies:
     sender_factory: Callable[[], object]
     output: Callable[[str], None] = print
     settings: Settings = field(default_factory=Settings)
+    enrichment: object | None = None
+    scorer: object | None = None
 
 
 def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
@@ -49,6 +58,7 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         return RunResult(RunStatus.SKIPPED_MARKET_CLOSED)
 
     signals = {}
+    bars_by_symbol = {}
     failures: list[str] = []
     qqq_trend_ok = False
     benchmark_trends: dict[str, bool | None] = {"SPY": None, "QQQ": None}
@@ -56,6 +66,7 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
     for symbol in order:
         try:
             bars = deps.data.daily_history(symbol, session.opens_at)
+            bars_by_symbol[symbol] = bars
             if symbol in benchmark_trends:
                 benchmark_trends[symbol] = deps.signals.trend_qualifies(bars)
             if symbol == "QQQ":
@@ -77,6 +88,32 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         candidates.append(evaluate_premarket(signal, quote, settings=deps.settings))
     candidates = rank_candidates(candidates)
 
+    assessments = ()
+    enrichment_failure_count = 0
+    if candidates and deps.enrichment is not None and deps.scorer is not None:
+        benchmarks = {symbol: bars_by_symbol[symbol] for symbol in ("SPY", "QQQ") if symbol in bars_by_symbol}
+        contexts = tuple(
+            CandidateInput(
+                item.signal.symbol,
+                item,
+                bars_by_symbol[item.signal.symbol],
+                benchmarks,
+                item.quote.price if item.quote.status == QuoteStatus.OK else None,
+                now,
+            )
+            for item in candidates
+            if item.signal.symbol in bars_by_symbol
+        )
+        bundles = deps.enrichment.enrich(contexts)
+        assessments = tuple(deps.scorer.score(item.candidate, bundles[item.symbol]) for item in contexts)
+        enrichment_failure_count = sum(
+            any(
+                result is not None and result.status == DimensionStatus.ERROR
+                for result in (bundle.market, bundle.fundamental, bundle.event_news, bundle.options)
+            )
+            for bundle in bundles.values()
+        )
+
     def benchmark_summary(symbol: str) -> str:
         trend = benchmark_trends[symbol]
         if trend is None:
@@ -89,30 +126,41 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         qqq_summary=benchmark_summary("QQQ"),
         candidates=tuple(candidates),
         failures=tuple(dict.fromkeys((*failures, *quote_failures))),
+        assessments=assessments,
     )
     if send:
         try:
-            image_bytes = render_png(report)
             sender = deps.sender_factory()
-            sender.send_image(image_bytes)
+            pages = render_png_pages(report) if assessments else (render_png(report),)
+            for image_bytes in pages:
+                sender.send_image(image_bytes)
         except Exception:
-            return RunResult(RunStatus.DELIVERY_FAILED, len(candidates), len(failures))
+            return RunResult(RunStatus.DELIVERY_FAILED, len(candidates), len(failures), enrichment_failure_count)
     else:
         chunks = render_markdown(report)
         for chunk in chunks:
             deps.output(chunk)
 
     status = RunStatus.DATA_FAILED if len(failures) == len(SYMBOLS) else RunStatus.SUCCESS
-    return RunResult(status, len(candidates), len(failures))
+    return RunResult(status, len(candidates), len(failures), enrichment_failure_count)
 
 
 def _dependencies(settings: Settings) -> Dependencies:
+    enrichment = EnrichmentRunner(
+        YahooMarketContextProvider(),
+        YahooFundamentalsProvider(),
+        YahooEventNewsProvider(),
+        YahooOptionsProvider(settings=settings),
+        settings,
+    )
     return Dependencies(
         calendar=MarketSessionService(),
         data=YahooMarketData(stale_minutes=settings.quote_stale_minutes),
         signals=SignalEngine(settings),
         sender_factory=lambda: WeComClient(settings.wecom_webhook_url or ""),
         settings=settings,
+        enrichment=enrichment,
+        scorer=AssessmentScorer(settings),
     )
 
 
