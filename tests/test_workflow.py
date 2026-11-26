@@ -13,3 +13,6 @@ def test_validation_workflow_only_runs_dry_and_archives_failures():
     archive = next(step for step in steps if step.get("name") == "Archive scan")
     assert archive["if"] == "always()"
     assert archive["with"]["path"] in dry["run"]
+    replay = next(step for step in steps if step.get("name") == "Historical dry run")
+    assert replay["env"] == dry["env"]
+    assert "workflow_dispatch" in replay["if"]

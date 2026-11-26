@@ -88,6 +88,12 @@ def test_premarket_marks_exact_boundary_fresh_and_older_quote_stale():
     assert stale.status == QuoteStatus.STALE
 
 
+def test_historical_quote_excludes_unfinished_minute():
+    now = datetime(2026, 11, 20, 8, 30, tzinfo=NY)
+    market = MassiveMarketData(Client([bar("2026-11-20 08:29", 101), bar("2026-11-20 08:30", 999)]))
+    assert market.premarket_quote("SPY", now, completed_only=True).price == 101
+
+
 def test_premarket_returns_missing_for_empty_or_malformed_results():
     now = datetime(2026, 11, 20, 8, 30, tzinfo=NY)
 

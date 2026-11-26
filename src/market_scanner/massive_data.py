@@ -59,7 +59,7 @@ class MassiveMarketData:
             raise MarketDataError(f"{symbol}: latest bar is not the previous session")
         return result
 
-    def premarket_quote(self, symbol: str, now: datetime) -> PremarketQuote:
+    def premarket_quote(self, symbol: str, now: datetime, *, completed_only: bool = False) -> PremarketQuote:
         date = now.date().isoformat()
         try:
             results = self._client.get(
@@ -74,7 +74,7 @@ class MassiveMarketData:
             return PremarketQuote(symbol, QuoteStatus.MISSING, None, None, "no premarket quote")
         valid = (
             (frame.index.date == now.date())
-            & (frame.index <= pd.Timestamp(now))
+            & (frame.index + (pd.Timedelta(minutes=1) if completed_only else pd.Timedelta(0)) <= pd.Timestamp(now))
             & (frame.index.time >= time(4, 0))
             & (frame.index.time < time(9, 30))
         )

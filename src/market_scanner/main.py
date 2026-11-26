@@ -66,11 +66,12 @@ def _provider_summary(deps: Dependencies) -> str:
     return f"providers {market} {news} fundamentals=yahoo options=yahoo"
 
 
-def run_scan(deps: Dependencies, *, now: datetime, send: bool, archive: Path | None = None) -> RunResult:
+def run_scan(deps: Dependencies, *, now: datetime, send: bool, archive: Path | None = None,
+             quote_clock: Callable[[], datetime] | None = None, archive_metadata: dict | None = None) -> RunResult:
     def save(**payload):
         if archive is not None:
             archive.parent.mkdir(parents=True, exist_ok=True)
-            archive.write_text(json.dumps({"scan_time": now.isoformat(), **payload}, ensure_ascii=False,
+            archive.write_text(json.dumps({"scan_time": now.isoformat(), **(archive_metadata or {}), **payload}, ensure_ascii=False,
                                           indent=2, default=str), encoding="utf-8")
 
     session = deps.calendar.session_for(now.astimezone(NY).date())
@@ -104,7 +105,7 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool, archive: Path | N
         signal = signals.get(symbol)
         if signal is None and not (archive is not None and symbol in ("SPY", "QQQ")):
             continue
-        requested_at = datetime.now(NY) if archive is not None else now
+        requested_at = quote_clock() if quote_clock is not None else now
         quote = deps.data.premarket_quote(symbol, requested_at)
         if archive is not None:
             age = (requested_at - quote.observed_at).total_seconds() if quote.observed_at else None
@@ -245,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         settings = Settings.from_env(require_webhook=args.send)
     except ConfigError as exc:
         parser.error(str(exc))
-    result = run_scan(_dependencies(settings), now=datetime.now(NY), send=args.send, archive=args.archive_json)
+    result = run_scan(_dependencies(settings), now=datetime.now(NY), send=args.send, archive=args.archive_json,
+                      quote_clock=lambda: datetime.now(NY))
     if result.status in {RunStatus.SUCCESS, RunStatus.SKIPPED_MARKET_CLOSED}:
         return 0
     return 1
