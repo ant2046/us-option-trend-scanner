@@ -35,6 +35,8 @@
 
 ## 本地运行
 
+验证期间 GitHub Actions 在纽约时间工作日 08:30 只执行 dry-run（休市跳过取数），不配置企业微信 Webhook。每次运行的 Artifacts 保留 90 天，JSON 包括候选、评分、风险标签及候选和 SPY/QQQ 的报价来源、时间、请求时的报价年龄和回退原因。报价年龄不等于供应商的固定延迟。手动触发同样只运行 dry-run；下面的本地发送命令不受影响。
+
 ```bash
 python -m venv .venv
 python -m pip install -e ".[test]"

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -64,9 +66,16 @@ def _provider_summary(deps: Dependencies) -> str:
     return f"providers {market} {news} fundamentals=yahoo options=yahoo"
 
 
-def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
+def run_scan(deps: Dependencies, *, now: datetime, send: bool, archive: Path | None = None) -> RunResult:
+    def save(**payload):
+        if archive is not None:
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_text(json.dumps({"scan_time": now.isoformat(), **payload}, ensure_ascii=False,
+                                          indent=2, default=str), encoding="utf-8")
+
     session = deps.calendar.session_for(now.astimezone(NY).date())
     if session is None:
+        save(status=RunStatus.SKIPPED_MARKET_CLOSED)
         return RunResult(RunStatus.SKIPPED_MARKET_CLOSED)
 
     signals = {}
@@ -89,12 +98,22 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
             signals[symbol] = None
 
     candidates = []
+    quotes = {}
     quote_failures: list[str] = []
     for symbol in SYMBOLS:
         signal = signals.get(symbol)
+        if signal is None and not (archive is not None and symbol in ("SPY", "QQQ")):
+            continue
+        requested_at = datetime.now(NY) if archive is not None else now
+        quote = deps.data.premarket_quote(symbol, requested_at)
+        if archive is not None:
+            age = (requested_at - quote.observed_at).total_seconds() if quote.observed_at else None
+            quotes[symbol] = dict(source=quote.source or (
+                "yahoo" if quote.observed_at and isinstance(deps.data, YahooMarketData) else None),
+                requested_at=requested_at.isoformat(), quote_time=quote.observed_at,
+                age_seconds=age, status=quote.status, fallback_reason=quote.fallback_reason)
         if signal is None:
             continue
-        quote = deps.data.premarket_quote(symbol, now)
         if quote.status.value != "ok":
             quote_failures.append(symbol)
         candidates.append(evaluate_premarket(signal, quote, settings=deps.settings))
@@ -159,9 +178,11 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         for chunk in chunks:
             deps.output(chunk)
 
-    deps.output(_provider_summary(deps))
+    summary = _provider_summary(deps)
+    deps.output(summary)
 
     status = RunStatus.DATA_FAILED if len(failures) == len(SYMBOLS) else RunStatus.SUCCESS
+    save(status=status, providers=summary, report=asdict(report), quotes=quotes)
     return RunResult(status, len(candidates), len(failures), enrichment_failure_count)
 
 
@@ -216,12 +237,15 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--send", action="store_true", help="send report to enterprise WeChat")
     mode.add_argument("--dry-run", action="store_true", help="print report only (default)")
+    parser.add_argument("--archive-json", type=Path, help="write a dry-run snapshot")
     args = parser.parse_args(argv)
+    if args.send and args.archive_json:
+        parser.error("--archive-json is only available for dry runs")
     try:
         settings = Settings.from_env(require_webhook=args.send)
     except ConfigError as exc:
         parser.error(str(exc))
-    result = run_scan(_dependencies(settings), now=datetime.now(NY), send=args.send)
+    result = run_scan(_dependencies(settings), now=datetime.now(NY), send=args.send, archive=args.archive_json)
     if result.status in {RunStatus.SUCCESS, RunStatus.SKIPPED_MARKET_CLOSED}:
         return 0
     return 1

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import json
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -82,6 +83,38 @@ def test_closed_market_skips_data_and_send():
     assert result.status == RunStatus.SKIPPED_MARKET_CLOSED
     assert data.daily_calls == []
     assert sender.messages == []
+
+
+def test_validation_archives_benchmark_quotes_even_without_candidates(tmp_path):
+    class NoSignals(FakeSignals):
+        def evaluate(self, symbol, bars, qqq_trend_ok):
+            return None
+
+    class ObservedData(FakeData):
+        def premarket_quote(self, symbol, now):
+            from datetime import timedelta
+            return PremarketQuote(symbol, QuoteStatus.OK, 101, now - timedelta(seconds=90),
+                                  source="yahoo", fallback_reason="massive_stale;yahoo_ok")
+
+    path = tmp_path / "scan.json"
+    dependencies = Dependencies(FakeCalendar(), ObservedData(), NoSignals(),
+                                lambda: (_ for _ in ()).throw(AssertionError("sender constructed")),
+                                lambda _: None)
+    run_scan(dependencies, now=NOW, send=False, archive=path)
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    assert snapshot["report"]["candidates"] == []
+    assert set(snapshot["quotes"]) == {"SPY", "QQQ"}
+    assert snapshot["quotes"]["SPY"]["age_seconds"] == 90
+    assert snapshot["quotes"]["SPY"]["source"] == "yahoo"
+    assert snapshot["quotes"]["SPY"]["fallback_reason"] == "massive_stale;yahoo_ok"
+
+
+def test_validation_archives_closed_session_without_requests(tmp_path):
+    path = tmp_path / "scan.json"
+    data = FakeData()
+    run_scan(deps(data, opened=False), now=NOW, send=False, archive=path)
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "skipped_market_closed"
+    assert data.daily_calls == []
 
 
 def test_normal_flow_fetches_qqq_first_and_sends_one_png():

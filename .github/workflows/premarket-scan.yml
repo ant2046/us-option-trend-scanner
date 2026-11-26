@@ -5,12 +5,6 @@ on:
     - cron: "30 8 * * 1-5"
       timezone: "America/New_York"
   workflow_dispatch:
-    inputs:
-      send:
-        description: "Send the report to enterprise WeChat"
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: premarket-trend-scan-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'scheduled' }}
@@ -26,64 +20,18 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install CJK font
-        if: github.event_name == 'schedule' || inputs.send == true
-        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
       - name: Install dependencies
-        run: python -m pip install -e ".[test]"
-      - name: Run tests
-        if: github.event_name == 'schedule' || inputs.send == true
-        run: python -m pytest -q
-      - name: Scheduled or explicitly requested send
-        if: github.event_name == 'schedule' || inputs.send == true
-        env:
-          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
-          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
-        run: python -m market_scanner.main --send
-      - name: Manual dry run
-        if: github.event_name == 'workflow_dispatch' && inputs.send != true
+        run: python -m pip install -e .
+      - name: Validation dry run
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
-        run: |
-          python -m market_scanner.main --dry-run
-          python - <<'PY'
-          from datetime import datetime, time, timedelta, timezone
-          from zoneinfo import ZoneInfo
-
-          import exchange_calendars as xcals
-          import pandas as pd
-
-          from market_scanner.config import Settings
-          from market_scanner.massive import MassiveClient
-          from market_scanner.massive_data import MassiveMarketData
-
-          settings = Settings.from_env(require_webhook=False)
-          if not settings.massive_api_key:
-              raise SystemExit("Missing MASSIVE_API_KEY")
-          ny = ZoneInfo("America/New_York")
-          today = datetime.now(ny).date()
-          session = xcals.get_calendar("XNYS").date_to_session(pd.Timestamp(today), direction="previous")
-          client = MassiveClient(settings.massive_api_key)
-          market = MassiveMarketData(client)
-          bars = market.daily_history(
-              "SPY", datetime.combine(session.date(), datetime.min.time(), ny)
-          )
-          print(f"Verified source=massive symbol=SPY daily_bars={len(bars)} latest_session={bars.index[-1].date()}")
-          premarket_at = datetime.combine(bars.index[-1].date(), time(8, 30), ny)
-          quote = market.premarket_quote("SPY", premarket_at)
-          if quote.status.value != "ok" or quote.observed_at is None:
-              raise SystemExit(f"Massive premarket check failed: {quote.status.value}")
-          print(f"Verified source=massive symbol=SPY premarket_minute={quote.observed_at.isoformat()}")
-
-          end = premarket_at.astimezone(timezone.utc)
-          articles = client.get("/v2/reference/news", {
-              "ticker": "SPY", "published_utc.gte": (end - timedelta(hours=24)).isoformat(),
-              "published_utc.lte": end.isoformat(), "limit": 100,
-          }, paginate=True)
-          matched = [a for a in articles if a.get("title") and a.get("published_utc")
-                     and (a.get("publisher") or {}).get("name")]
-          if not matched:
-              raise SystemExit("Massive news check returned no usable SPY articles")
-          print(f"Verified source=massive symbol=SPY news_articles={len(matched)} window_end={end.isoformat()}")
-          PY
+        run: python -m market_scanner.main --dry-run --archive-json scan-results/scan.json
+      - name: Archive scan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: premarket-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scan-results/scan.json
+          if-no-files-found: error
+          retention-days: 90
 

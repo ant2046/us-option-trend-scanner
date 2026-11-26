@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Callable
 
@@ -62,13 +63,15 @@ class FallbackMarketData:
             primary = PremarketQuote(symbol, QuoteStatus.ERROR, None, None, type(exc).__name__)
         if primary.status == QuoteStatus.OK:
             self._massive_successes += 1
-            return primary
+            return replace(primary, source="massive")
         self._fallbacks += 1
         try:
             fallback = self._fallback.premarket_quote(symbol, now)
         except Exception as exc:
             fallback = PremarketQuote(symbol, QuoteStatus.ERROR, None, None, type(exc).__name__)
-        return max((primary, fallback), key=self._quote_rank)
+        selected = max((primary, fallback), key=self._quote_rank)
+        source = ("massive" if selected is primary else "yahoo") if selected.observed_at else None
+        return replace(selected, source=source, fallback_reason=f"massive_{primary.status.value};yahoo_{fallback.status.value}")
 
     def source_summary(self) -> str:
         source = "massive+yahoo" if self._massive_successes and self._fallbacks else "massive" if self._massive_successes else "yahoo_fallback" if self._fallbacks else "not_used"

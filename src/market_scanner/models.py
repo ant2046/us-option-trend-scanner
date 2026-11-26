@@ -48,6 +48,8 @@ class PremarketQuote:
     price: float | None
     observed_at: datetime | None
     detail: str | None = None
+    source: str | None = None
+    fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)
