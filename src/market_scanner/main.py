@@ -54,6 +54,16 @@ class Dependencies:
     scorer: object | None = None
 
 
+def _provider_summary(deps: Dependencies) -> str:
+    market = deps.data.source_summary() if hasattr(deps.data, "source_summary") else "market=yahoo"
+    news = "news=yahoo"
+    if deps.enrichment is not None:
+        provider = getattr(deps.enrichment, "providers", {}).get("event_news")
+        if provider is not None and hasattr(provider, "source_summary"):
+            news = provider.source_summary()
+    return f"providers {market} {news} fundamentals=yahoo options=yahoo"
+
+
 def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
     session = deps.calendar.session_for(now.astimezone(NY).date())
     if session is None:
@@ -148,6 +158,8 @@ def run_scan(deps: Dependencies, *, now: datetime, send: bool) -> RunResult:
         chunks = render_markdown(report)
         for chunk in chunks:
             deps.output(chunk)
+
+    deps.output(_provider_summary(deps))
 
     status = RunStatus.DATA_FAILED if len(failures) == len(SYMBOLS) else RunStatus.SUCCESS
     return RunResult(status, len(candidates), len(failures), enrichment_failure_count)

@@ -41,7 +41,7 @@ def test_workflow_installs_cjk_font_before_sending_image_report():
     assert steps[send_index]["env"]["WECOM_WEBHOOK_URL"] == "${{ secrets.WECOM_WEBHOOK_URL }}"
 
 
-def test_send_step_receives_massive_secret_but_test_and_dry_run_do_not():
+def test_scan_steps_receive_massive_secret_but_dry_run_cannot_send():
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["scan"]["steps"]
     send = next(step for step in steps if step.get("name") == "Scheduled or explicitly requested send")
@@ -50,4 +50,5 @@ def test_send_step_receives_massive_secret_but_test_and_dry_run_do_not():
 
     assert send["env"]["MASSIVE_API_KEY"] == "${{ secrets.MASSIVE_API_KEY }}"
     assert "MASSIVE_API_KEY" not in tests.get("env", {})
-    assert "MASSIVE_API_KEY" not in dry_run.get("env", {})
+    assert dry_run["env"]["MASSIVE_API_KEY"] == "${{ secrets.MASSIVE_API_KEY }}"
+    assert "WECOM_WEBHOOK_URL" not in dry_run["env"]

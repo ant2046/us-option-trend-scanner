@@ -271,3 +271,20 @@ def test_dependency_assembly_remains_yahoo_only_without_massive_key():
     assert isinstance(dependencies.enrichment.providers["event_news"], YahooEventNewsProvider)
     assert isinstance(dependencies.enrichment.providers["fundamental"], YahooFundamentalsProvider)
     assert isinstance(dependencies.enrichment.providers["options"], YahooOptionsProvider)
+
+
+def test_run_outputs_provider_summary_for_operational_visibility():
+    output = []
+    assembled = _dependencies(Settings(massive_api_key="configured-secret"))
+    assembled.data._primary = FakeData()
+    assembled.data._fallback = FakeData()
+    dependencies = Dependencies(
+        FakeCalendar(), assembled.data, FakeSignals(), lambda: Sender(), output.append,
+        assembled.settings, None, None,
+    )
+
+    result = run_scan(dependencies, now=NOW, send=False)
+
+    assert result.status == RunStatus.SUCCESS
+    assert any(line.startswith("providers market=massive") for line in output)
+    assert any("fundamentals=yahoo options=yahoo" in line for line in output)

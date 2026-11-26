@@ -22,6 +22,8 @@ class FallbackMarketData:
     def __init__(self, primary, fallback):
         self._primary = primary
         self._fallback = fallback
+        self._fallbacks = 0
+        self._massive_successes = 0
 
     @staticmethod
     def _valid_daily(frame) -> bool:
@@ -35,9 +37,11 @@ class FallbackMarketData:
         try:
             frame = self._primary.daily_history(symbol, completed_before)
             if self._valid_daily(frame):
+                self._massive_successes += 1
                 return frame
         except Exception:
             pass
+        self._fallbacks += 1
         return self._fallback.daily_history(symbol, completed_before)
 
     @staticmethod
@@ -57,12 +61,18 @@ class FallbackMarketData:
         except Exception as exc:
             primary = PremarketQuote(symbol, QuoteStatus.ERROR, None, None, type(exc).__name__)
         if primary.status == QuoteStatus.OK:
+            self._massive_successes += 1
             return primary
+        self._fallbacks += 1
         try:
             fallback = self._fallback.premarket_quote(symbol, now)
         except Exception as exc:
             fallback = PremarketQuote(symbol, QuoteStatus.ERROR, None, None, type(exc).__name__)
         return max((primary, fallback), key=self._quote_rank)
+
+    def source_summary(self) -> str:
+        source = "massive+yahoo" if self._massive_successes and self._fallbacks else "massive" if self._massive_successes else "yahoo_fallback" if self._fallbacks else "not_used"
+        return f"market={source} massive_successes={self._massive_successes} market_fallbacks={self._fallbacks}"
 
 
 class YahooMarketData:

@@ -194,6 +194,7 @@ class FallbackEventNewsProvider:
     def __init__(self, primary, fallback):
         self.primary = primary
         self.fallback = fallback
+        self._fallbacks = 0
 
     @staticmethod
     def _has_fresh_news(result: ProviderResult) -> bool:
@@ -206,6 +207,7 @@ class FallbackEventNewsProvider:
                 return primary
         except Exception:
             pass
+        self._fallbacks += 1
         fallback = self.fallback.assess(symbol, now)
         evidence = tuple(
             replace(item, source="yahoo_fallback")
@@ -214,3 +216,7 @@ class FallbackEventNewsProvider:
             for item in fallback.evidence
         )
         return replace(fallback, evidence=evidence)
+
+    def source_summary(self) -> str:
+        source = "massive" if self._fallbacks == 0 else "yahoo_fallback"
+        return f"news={source} news_fallbacks={self._fallbacks}"

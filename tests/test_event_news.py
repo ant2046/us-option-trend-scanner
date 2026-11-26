@@ -173,3 +173,4 @@ def test_event_news_fallback_uses_yahoo_and_marks_source_when_massive_fails(tmp_
     sources = {item.source for item in result.evidence if item.key in {"negative_headlines", "news_fresh"}}
 
     assert sources == {"yahoo_fallback"}
+    assert provider.source_summary() == "news=yahoo_fallback news_fallbacks=1"

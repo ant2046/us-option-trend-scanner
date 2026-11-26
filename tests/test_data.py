@@ -199,3 +199,14 @@ def test_fallback_market_data_retains_stale_primary_when_backup_has_less_informa
 
     assert result.status == QuoteStatus.STALE
     assert result.price == 99
+
+
+def test_fallback_market_data_reports_actual_fallback_usage():
+    primary = Provider(daily=valid_frame(), quote=fallback_quote(QuoteStatus.STALE, 99, 10))
+    backup = Provider(daily=valid_frame(), quote=fallback_quote(QuoteStatus.OK, 101, 25))
+    data = FallbackMarketData(primary, backup)
+
+    data.daily_history("SPY", datetime(2026, 11, 20, 9, 30, tzinfo=NY))
+    data.premarket_quote("SPY", datetime(2026, 11, 20, 8, 30, tzinfo=NY))
+
+    assert data.source_summary() == "market=massive+yahoo massive_successes=1 market_fallbacks=1"

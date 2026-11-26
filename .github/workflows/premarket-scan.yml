@@ -40,5 +40,30 @@ jobs:
         run: python -m market_scanner.main --send
       - name: Manual dry run
         if: github.event_name == 'workflow_dispatch' && inputs.send != true
-        run: python -m market_scanner.main --dry-run
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          python -m market_scanner.main --dry-run
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          import exchange_calendars as xcals
+          import pandas as pd
+
+          from market_scanner.config import Settings
+          from market_scanner.massive import MassiveClient
+          from market_scanner.massive_data import MassiveMarketData
+
+          settings = Settings.from_env(require_webhook=False)
+          if not settings.massive_api_key:
+              raise SystemExit("Missing MASSIVE_API_KEY")
+          ny = ZoneInfo("America/New_York")
+          today = datetime.now(ny).date()
+          session = xcals.get_calendar("XNYS").date_to_session(pd.Timestamp(today), direction="previous")
+          bars = MassiveMarketData(MassiveClient(settings.massive_api_key)).daily_history(
+              "SPY", datetime.combine(session.date(), datetime.min.time(), ny)
+          )
+          print(f"Verified source=massive symbol=SPY daily_bars={len(bars)} latest_session={bars.index[-1].date()}")
+          PY
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from typing import Any, Callable
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -32,9 +33,11 @@ class MassiveClient:
         self._sleep = sleep
 
     def _url(self, path: str) -> str:
-        if path.startswith("https://") or path.startswith("http://"):
-            return path
-        return f"{self._base_url}/{path.lstrip('/')}"
+        url = urljoin(f"{self._base_url}/", path)
+        target, origin = urlsplit(url), urlsplit(self._base_url)
+        if (target.scheme, target.netloc) != (origin.scheme, origin.netloc):
+            raise MassiveError("Massive request failed: unexpected URL origin")
+        return url
 
     def _request(self, url: str, params: Mapping[str, object] | None) -> dict[str, Any]:
         last_error: Exception | None = None
@@ -45,6 +48,7 @@ class MassiveClient:
                     params=dict(params) if params is not None else None,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     timeout=self._timeout_seconds,
+                    allow_redirects=False,
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
                 last_error = exc
@@ -84,7 +88,11 @@ class MassiveClient:
 
         results: list[dict[str, Any]] = []
         next_params = params
+        visited = set()
         while url:
+            if url in visited:
+                raise MassiveError("Massive request failed: pagination loop")
+            visited.add(url)
             payload = self._request(url, next_params)
             page = payload.get("results")
             if not isinstance(page, list):
