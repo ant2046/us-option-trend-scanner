@@ -22,6 +22,7 @@ class MassiveClient:
         retries: int = 1,
         session=None,
         sleep: Callable[[float], None] = time.sleep,
+        min_request_interval: float = 0,
     ):
         if not api_key:
             raise ValueError("api_key is required")
@@ -31,6 +32,8 @@ class MassiveClient:
         self._retries = retries
         self._session = session or requests.Session()
         self._sleep = sleep
+        self._min_request_interval = min_request_interval
+        self._last_request = None
 
     def _url(self, path: str) -> str:
         url = urljoin(f"{self._base_url}/", path)
@@ -43,6 +46,9 @@ class MassiveClient:
         last_error: Exception | None = None
         for attempt in range(self._retries + 1):
             try:
+                if self._last_request is not None and self._min_request_interval:
+                    self._sleep(max(0, self._min_request_interval - (time.monotonic() - self._last_request)))
+                self._last_request = time.monotonic()
                 response = self._session.get(
                     url,
                     params=dict(params) if params is not None else None,

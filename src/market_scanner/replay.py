@@ -82,8 +82,10 @@ def main():
     last = calendar.date_to_session(now.tz_convert(NY).date(), direction="previous")
     if calendar.session_close(last) > now:
         last = calendar.previous_session(last)
-    sessions = calendar.sessions_window(last, -19)
-    client = MassiveClient(settings.massive_api_key, retries=2)
+    sessions = calendar.sessions_in_range(last - pd.Timedelta(days=60), last)[-20:]
+    if len(sessions) != 20:
+        raise RuntimeError("Expected exactly 20 completed sessions")
+    client = MassiveClient(settings.massive_api_key, retries=2, min_request_interval=12.5)
     data = ReplayData(client, sessions[0].date(), last.date(), calendar)
     deps = replace(_dependencies(settings), data=data, enrichment=None, scorer=None, output=lambda _: None)
     summary = []
