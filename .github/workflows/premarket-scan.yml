@@ -47,7 +47,7 @@ jobs:
         run: |
           python -m market_scanner.main --dry-run
           python - <<'PY'
-          from datetime import datetime
+          from datetime import datetime, time, timedelta, timezone
           from zoneinfo import ZoneInfo
 
           import exchange_calendars as xcals
@@ -63,9 +63,27 @@ jobs:
           ny = ZoneInfo("America/New_York")
           today = datetime.now(ny).date()
           session = xcals.get_calendar("XNYS").date_to_session(pd.Timestamp(today), direction="previous")
-          bars = MassiveMarketData(MassiveClient(settings.massive_api_key)).daily_history(
+          client = MassiveClient(settings.massive_api_key)
+          market = MassiveMarketData(client)
+          bars = market.daily_history(
               "SPY", datetime.combine(session.date(), datetime.min.time(), ny)
           )
           print(f"Verified source=massive symbol=SPY daily_bars={len(bars)} latest_session={bars.index[-1].date()}")
+          premarket_at = datetime.combine(bars.index[-1].date(), time(8, 30), ny)
+          quote = market.premarket_quote("SPY", premarket_at)
+          if quote.status.value != "ok" or quote.observed_at is None:
+              raise SystemExit(f"Massive premarket check failed: {quote.status.value}")
+          print(f"Verified source=massive symbol=SPY premarket_minute={quote.observed_at.isoformat()}")
+
+          end = premarket_at.astimezone(timezone.utc)
+          articles = client.get("/v2/reference/news", {
+              "ticker": "SPY", "published_utc.gte": (end - timedelta(hours=24)).isoformat(),
+              "published_utc.lte": end.isoformat(), "limit": 100,
+          }, paginate=True)
+          matched = [a for a in articles if a.get("title") and a.get("published_utc")
+                     and (a.get("publisher") or {}).get("name")]
+          if not matched:
+              raise SystemExit("Massive news check returned no usable SPY articles")
+          print(f"Verified source=massive symbol=SPY news_articles={len(matched)} window_end={end.isoformat()}")
           PY
 
